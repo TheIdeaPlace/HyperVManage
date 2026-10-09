@@ -19,13 +19,36 @@ public sealed partial class NewVmViewModel : ObservableObject
     /// <summary>Runs the build. Swapped for the demo, and in tests, so nothing real runs.</summary>
     internal Func<NewVmOptions, Action<string>, CancellationToken, Task<BuildOutcome>> RunScript { get; set; } = NewVmScript.RunAsync;
 
-    public NewVmViewModel(IEnumerable<string> existingNames)
+    private readonly IIsoHistory _isoHistory;
+
+    /// <summary>The last entry in the Windows ISO list: choosing it opens the file dialog.</summary>
+    public const string BrowseChoice = "Browse for an ISO…";
+
+    /// <param name="isoHistory">The ISOs built from before; none if not given.</param>
+    public NewVmViewModel(IEnumerable<string> existingNames, IIsoHistory? isoHistory = null)
     {
+        _isoHistory = isoHistory ?? new InMemoryIsoHistory();
         var taken = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
         // This PC's name first, as the script does, so VMs made on different PCs on one network
         // don't share a name: two computers with one name confuse Remote Desktop.
         _vmName = SuggestName($"{Environment.MachineName}-Win11", taken);
-        _isoPath = IsoFinder.FindNewest(IsoFinder.DownloadsFolder, IsoFinder.HostIsArm64) ?? "";
+        // The ISOs used before, most recent first, then the newest in Downloads if it isn't one of
+        // them; the most recent is chosen. Then Browse.
+        var newest = IsoFinder.FindNewest(IsoFinder.DownloadsFolder, IsoFinder.HostIsArm64);
+        var choices = _isoHistory.Recent().ToList();
+        if (newest is not null && !choices.Contains(newest, StringComparer.OrdinalIgnoreCase)) choices.Add(newest);
+        _isoPath = choices.FirstOrDefault() ?? "";
+        IsoChoices = [.. choices, BrowseChoice];
+    }
+
+    /// <summary>What the Windows ISO list offers: remembered ISOs, Downloads' newest, then <see cref="BrowseChoice"/>.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<string> IsoChoices { get; }
+
+    /// <summary>A file chosen with Browse: added to the list, after the remembered ones, and chosen.</summary>
+    public void ChooseBrowsedIso(string path)
+    {
+        if (!IsoChoices.Contains(path, StringComparer.OrdinalIgnoreCase)) IsoChoices.Insert(IsoChoices.Count - 1, path);
+        IsoPath = IsoChoices.First(c => c.Equals(path, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>The base name, for example SURFACEPRO7-Win11, or -2, -3 ... after it if that is taken.</summary>
@@ -87,8 +110,10 @@ public sealed partial class NewVmViewModel : ObservableObject
         string? problem = null;
         var name = VmName.Trim();
         var iso = IsoPath.Trim();
+        var browseShowing = iso == BrowseChoice;
         // The ISO is always passed explicitly, so a stopped build knows which one to dismount.
-        if (iso.Length == 0) iso = IsoFinder.FindNewest(IsoFinder.DownloadsFolder, IsoFinder.HostIsArm64) ?? "";
+        if (browseShowing) iso = "";
+        else if (iso.Length == 0) iso = IsoFinder.FindNewest(IsoFinder.DownloadsFolder, IsoFinder.HostIsArm64) ?? "";
 
         // The script mounts the full path, so the cleanup after a stop must dismount that same path.
         if (iso.Length > 0) { try { iso = System.IO.Path.GetFullPath(iso); } catch (Exception) { } }
@@ -104,7 +129,8 @@ public sealed partial class NewVmViewModel : ObservableObject
         else if (user.Length > 20 || (user.Length > 0 && user.Trim('.', ' ').Length == 0) || user.IndexOfAny(['"', '/', '\\', '[', ']', ':', ';', '|', '=', ',', '+', '*', '?', '<', '>', '@']) >= 0)
             problem = "Windows can't use that user name. Use up to 20 letters, digits, spaces, dots, hyphens or underscores.";
         else if (Password.Contains('"')) problem = "The password can't contain a double quote (\").";
-        else if (iso.Length == 0) problem = "There's no Windows ISO in your Downloads folder. Choose one with Browse.";
+        else if (browseShowing) problem = "Choose a Windows ISO: press Enter on Browse for an ISO, or pick one from the list.";
+        else if (iso.Length == 0) problem = "There's no Windows ISO in your Downloads folder. Choose Browse for an ISO in the Windows ISO list.";
         else if (!System.IO.File.Exists(iso)) problem = $"Can't find the ISO {iso}.";
         else if (!int.TryParse(Processors.Trim(), out var c) || c < 1 || c > maxProcessors)
             problem = $"Processors must be a whole number from 1 to {maxProcessors}.";
@@ -125,6 +151,8 @@ public sealed partial class NewVmViewModel : ObservableObject
         var options = Validate();
         if (options is null) { Announce?.Invoke(Error); return; }
 
+        // Remembered as the build starts, so it's offered first next time, even if this one fails.
+        _isoHistory.Remember(options.IsoPath);
         HasStarted = true;
         IsRunning = true;
         _stop = new CancellationTokenSource();

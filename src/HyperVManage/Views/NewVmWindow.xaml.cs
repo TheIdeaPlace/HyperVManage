@@ -23,7 +23,10 @@ public partial class NewVmWindow : Window
     {
         InitializeComponent();
         _vm = vm;
+        _isoToRestore = vm.IsoPath;
+        PickIso = ShowIsoDialog;
         DataContext = vm;
+        Loaded += (_, _) => SyncIsoSelection();
         vm.Announce += text => Announcer.Announce(this, text);
         vm.LineAppended += AppendLine;
         vm.PropertyChanged += OnVmPropertyChanged;
@@ -55,14 +58,37 @@ public partial class NewVmWindow : Window
 
         PreviewKeyDown += (_, e) =>
         {
-            // Escape closes, as Cancel does; modeless windows don't get that from IsCancel.
-            if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
+            if (Keyboard.Modifiers != ModifierKeys.None) return;
+            // Enter on Browse for an ISO, with the list open or closed, opens the file dialog. Taken
+            // here, at the window, because the list itself acts on Enter first when it's open.
+            if (e.Key == Key.Enter && IsoBox.IsKeyboardFocusWithin && _vm.IsoPath == NewVmViewModel.BrowseChoice)
+            {
+                e.Handled = true;
+                ChooseBrowse();
+            }
+            // Escape in the open list closes it and puts back the ISO there was when it opened, as
+            // any Windows drop-down does; the list itself then closes it.
+            else if (e.Key == Key.Escape && IsoBox.IsDropDownOpen)
+            {
+                _escapingList = true;
+            }
+            // Otherwise Escape closes the window, as Cancel does; modeless windows don't get that
+            // from IsCancel.
+            else if (e.Key == Key.Escape)
             {
                 e.Handled = true;
                 Close();
             }
         };
+        IsoBox.DropDownOpened += (_, _) => _isoToRestore = _vm.IsoPath == NewVmViewModel.BrowseChoice ? _isoToRestore : _vm.IsoPath;
+        IsoBox.IsKeyboardFocusWithinChanged += (_, e) =>
+        {
+            // Arrowed onto Browse in the closed box and then left: it wasn't chosen, so the ISO comes back.
+            if (e.NewValue is false && !_browsing && _vm.IsoPath == NewVmViewModel.BrowseChoice) _vm.IsoPath = _isoToRestore;
+        };
     }
+
+    private bool _escapingList;
 
     private void FocusName()
     {
@@ -75,6 +101,13 @@ public partial class NewVmWindow : Window
 
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(NewVmViewModel.IsoPath))
+        {
+            // While the list is open, arrowing only tries ISOs out; the one to go back to is the one
+            // there was when it opened.
+            if (!IsoBox.IsDropDownOpen && _vm.IsoPath != NewVmViewModel.BrowseChoice) _isoToRestore = _vm.IsoPath;
+            SyncIsoSelection();
+        }
         // Once the script starts the form disappears; put focus on its output so the user is
         // somewhere they can read, rather than on a control that just vanished.
         if (e.PropertyName == nameof(NewVmViewModel.HasStarted) && _vm.HasStarted)
@@ -117,7 +150,16 @@ public partial class NewVmWindow : Window
         Dispatcher.BeginInvoke(() => chosen.Focus(), System.Windows.Threading.DispatcherPriority.Input);
     }
 
-    private void Browse_Click(object sender, RoutedEventArgs e)
+    private void Browse_Click(object sender, RoutedEventArgs e) => BrowseForIso();
+
+    /// <summary>The ISO to go back to when Browse for an ISO is left without choosing a file: the
+    /// one showing before the list opened, or before arrowing onto Browse in the closed box.</summary>
+    private string _isoToRestore = "";
+
+    /// <summary>Asks for an ISO file; null if cancelled. The file dialog, or a stand-in in tests.</summary>
+    internal Func<string?> PickIso { get; set; }
+
+    private string? ShowIsoDialog()
     {
         var dialog = new OpenFileDialog
         {
@@ -125,8 +167,63 @@ public partial class NewVmWindow : Window
             Filter = "Disc images (*.iso)|*.iso",
             InitialDirectory = IsoFinder.DownloadsFolder,
         };
-        if (dialog.ShowDialog(this) == true) _vm.IsoPath = dialog.FileName;
+        return dialog.ShowDialog(this) == true ? dialog.FileName : null;
+    }
+
+    // Browse for an ISO opens the dialog only when chosen: Enter on it (see the window's
+    // PreviewKeyDown) or a click. Arrowing onto it only shows it; leaving it any other way puts
+    // back the ISO there was.
+    private void BrowseItem_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not ComboBoxItem { Content: NewVmViewModel.BrowseChoice }) return;
+        e.Handled = true;
+        ChooseBrowse();
+    }
+
+    private void ChooseBrowse()
+    {
+        _browsing = true;
+        IsoBox.IsDropDownOpen = false;
+        Dispatcher.BeginInvoke(BrowseForIso);
+    }
+
+    private void IsoBox_DropDownClosed(object? sender, EventArgs e)
+    {
+        // Escape, or closing on Browse without choosing it: the ISO from before comes back.
+        var restore = !_browsing && (_escapingList || _vm.IsoPath == NewVmViewModel.BrowseChoice);
+        _escapingList = false;
+        if (restore) _vm.IsoPath = _isoToRestore;
+        SyncIsoSelection();
+    }
+
+    /// <summary>From choosing Browse until its dialog closes.</summary>
+    private bool _browsing;
+
+    private void BrowseForIso()
+    {
+        _browsing = true;
+        try
+        {
+            if (PickIso() is { } file) _vm.ChooseBrowsedIso(file);
+            else _vm.IsoPath = _isoToRestore;
+        }
+        finally { _browsing = false; }
+        SyncIsoSelection();
         IsoBox.Focus();
+    }
+
+    /// <summary>
+    /// Keeps the list's selected entry on the ISO showing. With text search off WPF doesn't, and
+    /// the arrows would move from an entry that isn't the one shown. A typed path that isn't in
+    /// the list is left alone: clearing the selection would clear what was typed, so Down then
+    /// goes on from the entry selected before.
+    /// </summary>
+    private void SyncIsoSelection()
+    {
+        var index = -1;
+        for (var i = 0; i < _vm.IsoChoices.Count && index < 0; i++)
+            if (string.Equals(_vm.IsoChoices[i], _vm.IsoPath, StringComparison.OrdinalIgnoreCase)) index = i;
+        if (index >= 0 && IsoBox.SelectedIndex != index) IsoBox.SelectedIndex = index;
     }
 
     private void IsoLink_Click(object sender, RoutedEventArgs e)

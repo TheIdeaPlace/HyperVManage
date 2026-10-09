@@ -254,8 +254,9 @@ public class WindowTests
             ShowOffscreen(window);
             foreach (var box in new[] { "NameBox", "IsoBox", "EditionBox", "UserBox", "PasswordBox", "CpuBox", "MemoryBox", "DiskBox" })
             {
-                var tb = window.FindName(box) as TextBox;
-                Assert.NotNull(tb);
+                // The Windows ISO is an editable drop-down; the rest are text boxes.
+                var tb = window.FindName(box) as Control;
+                Assert.True(tb is TextBox or ComboBox { IsEditable: true }, box);
                 var peer = UIElementAutomationPeer.CreatePeerForElement(tb);
                 Assert.False(string.IsNullOrWhiteSpace(peer.GetName()), $"{box} has no accessible name");
             }

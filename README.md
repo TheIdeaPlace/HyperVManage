@@ -73,6 +73,14 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
   - Delete asks first, naming the disk files it will remove. It keeps any disk another VM uses
     or depends on, and only removes a desktop connection file that connects to this VM. It says
     afterwards what it kept and anything it couldn't delete.
+- **ISOs used before**: New Virtual Machine's Windows ISO is a list of the ISOs you've built VMs
+  from, the most recent first and already chosen, then the newest Windows ISO in your Downloads
+  folder, then Browse for an ISO. Arrow through it, or open it with Alt+Down Arrow; in the open
+  list each ISO is read file name first, then its folder. Browse for an ISO opens the file dialog
+  when you press Enter on it or click it. Arrowing onto it does nothing else, and closing the list
+  while on it puts back the ISO you had. You can still type or paste a path. An ISO is remembered
+  when a build starts with it, up to ten, in `%AppData%\HyperVManage\recent-isos.json`; one that
+  has been moved or deleted isn't offered. Demo mode remembers them only until it closes.
 - **Windows ISO downloads**: New Virtual Machine has links, under the ISO field, to Microsoft's
   Windows 11 download pages, with the page for this PC's kind of processor first (Hyper-V only
   runs Windows built for it) and the other kind's second. The Help menu has the same two. They
