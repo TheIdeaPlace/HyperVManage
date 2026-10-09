@@ -26,7 +26,7 @@
                          when merely arrowed onto. Text search is off: it would complete a typed path. -->
                     <ComboBox x:Name="IsoBox" AutomationProperties.Name="Windows ISO" IsEditable="True" IsTextSearchEnabled="False"
                               ItemsSource="{Binding IsoChoices}" Text="{Binding IsoPath, UpdateSourceTrigger=PropertyChanged}"
-                              DropDownClosed="IsoBox_DropDownClosed" PreviewKeyDown="IsoBox_PreviewKeyDown">
+                              DropDownClosed="IsoBox_DropDownClosed">
                         <!-- In the open list each ISO is read file name first, then its folder, so ISOs in
                              one folder can be told apart by ear; the box itself shows the full path. -->
                         <ComboBox.ItemContainerStyle>

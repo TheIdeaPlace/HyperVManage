@@ -97,7 +97,7 @@ public class IsoListBehaviorTests
             Vm = new NewVmViewModel([], history);
             Window = new NewVmWindow(Vm)
             {
-                ShowActivated = false, WindowStartupLocation = WindowStartupLocation.Manual, Left = -10000, Top = -10000,
+                ShowActivated = true, WindowStartupLocation = WindowStartupLocation.Manual, Left = -10000, Top = -10000,
             };
             Window.PickIso = () => { Picks++; return Answer; };
             Window.Show();
@@ -107,14 +107,23 @@ public class IsoListBehaviorTests
 
         public int BrowseIndex => Box.Items.Count - 1;
 
-        public void Enter()
+        /// <summary>The box's own text field, where a real key press starts: from there the key
+        /// tunnels through the window and the list before anything else sees it.</summary>
+        public TextBox Edit => (TextBox)Box.Template.FindName("PART_EditableTextBox", Box);
+
+        public void Press(Key key)
         {
-            Box.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(Box)!, 0, Key.Enter)
-            {
-                RoutedEvent = Keyboard.PreviewKeyDownEvent,
-            });
+            Window.Activate();
+            Edit.Focus();
+            Pump();
+            var preview = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(Edit)!, 0, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            Edit.RaiseEvent(preview);
+            if (!preview.Handled)
+                Edit.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(Edit)!, 0, key) { RoutedEvent = Keyboard.KeyDownEvent });
             Pump();
         }
+
+        public void Enter() => Press(Key.Enter);
 
         public void Dispose()
         {
@@ -197,6 +206,75 @@ public class IsoListBehaviorTests
         Assert.Equal(c, f.Vm.IsoPath);
         Assert.Equal(f.Vm.IsoChoices.IndexOf(c), f.Box.SelectedIndex);
         Assert.Equal(NewVmViewModel.BrowseChoice, f.Vm.IsoChoices[^1]);
+    }
+
+    [StaFact]
+    public void ArrowingThroughTheOpenList_ThenClosingOnBrowse_PutsBackTheIsoFromBeforeItOpened()
+    {
+        using var f = new Form();
+        f.Box.IsDropDownOpen = true;
+        Pump();
+        f.Box.SelectedIndex = 1; // A
+        Pump();
+        f.Box.SelectedIndex = f.BrowseIndex;
+        Pump();
+        f.Box.IsDropDownOpen = false;
+        Pump();
+        Assert.Equal(f.B, f.Vm.IsoPath);
+    }
+
+    [StaFact]
+    public void EscapeInTheOpenList_PutsBackTheIsoFromBeforeItOpened()
+    {
+        using var f = new Form();
+        f.Box.IsDropDownOpen = true;
+        Pump();
+        f.Box.SelectedIndex = 1; // A
+        Pump();
+        f.Press(Key.Escape);
+        Assert.False(f.Box.IsDropDownOpen);
+        Assert.True(f.Window.IsVisible);
+        Assert.Equal(f.B, f.Vm.IsoPath);
+        Assert.Equal(0, f.Picks);
+    }
+
+    [StaFact]
+    public void EnterOnBrowseInTheOpenList_CancelPutsBackTheIsoFromBeforeItOpened()
+    {
+        using var f = new Form();
+        f.Box.IsDropDownOpen = true;
+        Pump();
+        f.Box.SelectedIndex = 1;
+        Pump();
+        f.Box.SelectedIndex = f.BrowseIndex;
+        Pump();
+        f.Enter();
+        Assert.Equal(1, f.Picks);
+        Assert.Equal(f.B, f.Vm.IsoPath);
+    }
+
+    [StaFact]
+    public void LeavingBrowseInTheClosedBox_PutsBackTheIso()
+    {
+        using var f = new Form();
+        f.Window.Activate();
+        f.Edit.Focus();
+        Pump();
+        f.Box.SelectedIndex = f.BrowseIndex; // arrowed onto
+        Pump();
+        ((TextBox)f.Window.FindName("EditionBox")).Focus(); // Tab away
+        Pump();
+        Assert.Equal(0, f.Picks);
+        Assert.Equal(f.B, f.Vm.IsoPath);
+    }
+
+    [StaFact]
+    public void ATypedPathInAnotherCase_SelectsItsEntry()
+    {
+        using var f = new Form();
+        f.Box.Text = f.A.ToUpperInvariant();
+        Pump();
+        Assert.Equal(1, f.Box.SelectedIndex);
     }
 
     [StaFact]

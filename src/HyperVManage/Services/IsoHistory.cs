@@ -28,12 +28,24 @@ public sealed class IsoHistory(string? file = null) : IIsoHistory
 
     public IReadOnlyList<string> Recent() => Read().Where(StillThere).ToList();
 
-    /// <summary>A file on this PC that has gone isn't offered. One on a network share is offered
-    /// unchecked: asking a server that isn't there would hold up the window for its timeout, and
-    /// Create checks the file anyway.</summary>
+    /// <summary>A file on this PC that has gone isn't offered. One on a network share or a mapped
+    /// network drive is offered unchecked: asking a server that isn't there would hold up the
+    /// window for its timeout, and Create checks the file anyway.</summary>
     internal static bool StillThere(string path) => IsOnNetwork(path) || File.Exists(path);
 
-    private static bool IsOnNetwork(string path) => path.StartsWith(@"\\", StringComparison.Ordinal);
+    private static bool IsOnNetwork(string path)
+    {
+        if (path.StartsWith(@"\\", StringComparison.Ordinal)) return true;
+        try
+        {
+            // Asks Windows what kind of drive the letter is, without touching the drive itself.
+            return Path.GetPathRoot(path) is { Length: > 0 } root && new DriveInfo(root).DriveType == DriveType.Network;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
 
     public void Remember(string path)
     {
