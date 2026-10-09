@@ -17,8 +17,13 @@
                 <Label Content="Windows _ISO:" Target="{Binding ElementName=IsoBox}" Padding="0,8,0,2"/>
                 <DockPanel>
                     <Button Content="_Browse…" DockPanel.Dock="Right" Margin="6,0,0,0" Padding="8,0" Click="Browse_Click"/>
-                    <TextBox x:Name="IsoBox" AutomationProperties.Name="Windows ISO" Text="{Binding IsoPath, UpdateSourceTrigger=PropertyChanged}"
-                             AutomationProperties.HelpText="Leave empty to use the newest Windows ISO in your Downloads folder."/>
+                    <!-- Editable, so a path can be typed or pasted; the list holds the ISOs used before,
+                         then Browse for an ISO, which opens the file dialog on Enter or a click but not
+                         when merely arrowed onto. Text search is off: it would complete a typed path. -->
+                    <ComboBox x:Name="IsoBox" AutomationProperties.Name="Windows ISO" IsEditable="True" IsTextSearchEnabled="False"
+                              ItemsSource="{Binding IsoChoices}" Text="{Binding IsoPath, UpdateSourceTrigger=PropertyChanged}"
+                              DropDownClosed="IsoBox_DropDownClosed" PreviewKeyDown="IsoBox_PreviewKeyDown"
+                              AutomationProperties.HelpText="Leave empty to use the newest Windows ISO in your Downloads folder."/>
                 </DockPanel>
                 <!-- Microsoft's download pages: this PC's kind first. Each link is a Tab stop and
                      opens in the browser with Enter. Text and addresses are set in code. -->

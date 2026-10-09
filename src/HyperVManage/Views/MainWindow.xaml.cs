@@ -18,6 +18,8 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, ScreenshotWindow> _screenshots = [];
 
     private readonly UpdateChecker? _updates;
+    /// <summary>The ISOs New Virtual Machine has built from; in demo mode, only until the app closes.</summary>
+    private readonly IIsoHistory _isoHistory;
     private readonly IBugReportService? _bugReports;
 
     /// <param name="updates">Checks for updates at start and from Help; without it, Check for
@@ -31,6 +33,7 @@ public partial class MainWindow : Window
         _demo = demo;
         _updates = updates;
         _bugReports = bugReports;
+        _isoHistory = demo ? new InMemoryIsoHistory() : new IsoHistory();
         if (updates is not null)
         {
             updates.Report = text => { _vm.StatusText = text; Announcer.Announce(this, text); };
@@ -200,7 +203,7 @@ public partial class MainWindow : Window
     {
         // One at a time: the script works on disks and switches that a second run would trip over.
         if (_newVmWindow is not null) { _newVmWindow.Activate(); return; }
-        var newVm = new NewVmViewModel(_vm.Vms.Select(v => v.Name));
+        var newVm = new NewVmViewModel(_vm.Vms.Select(v => v.Name), _isoHistory);
         if (_demo) newVm.RunScript = Services.DemoNewVmScript.RunAsync;
         // async void, as an event handler is: everything in it is caught, so nothing can end the app.
         newVm.Finished += async outcome =>

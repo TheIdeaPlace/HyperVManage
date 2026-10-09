@@ -23,6 +23,7 @@ public partial class NewVmWindow : Window
     {
         InitializeComponent();
         _vm = vm;
+        _isoBeforeBrowse = vm.IsoPath;
         DataContext = vm;
         vm.Announce += text => Announcer.Announce(this, text);
         vm.LineAppended += AppendLine;
@@ -55,8 +56,9 @@ public partial class NewVmWindow : Window
 
         PreviewKeyDown += (_, e) =>
         {
-            // Escape closes, as Cancel does; modeless windows don't get that from IsCancel.
-            if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
+            // Escape closes, as Cancel does; modeless windows don't get that from IsCancel. With the
+            // ISO list open it only closes the list, as in any drop-down, keeping the form.
+            if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None && !IsoBox.IsDropDownOpen)
             {
                 e.Handled = true;
                 Close();
@@ -75,6 +77,8 @@ public partial class NewVmWindow : Window
 
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(NewVmViewModel.IsoPath) && _vm.IsoPath != NewVmViewModel.BrowseChoice)
+            _isoBeforeBrowse = _vm.IsoPath;
         // Once the script starts the form disappears; put focus on its output so the user is
         // somewhere they can read, rather than on a control that just vanished.
         if (e.PropertyName == nameof(NewVmViewModel.HasStarted) && _vm.HasStarted)
@@ -117,7 +121,29 @@ public partial class NewVmWindow : Window
         Dispatcher.BeginInvoke(() => chosen.Focus(), System.Windows.Threading.DispatcherPriority.Input);
     }
 
-    private void Browse_Click(object sender, RoutedEventArgs e)
+    private void Browse_Click(object sender, RoutedEventArgs e) => BrowseForIso();
+
+    /// <summary>The ISO chosen before Browse for an ISO was, to go back to if the dialog is cancelled.</summary>
+    private string _isoBeforeBrowse = "";
+
+    private void IsoBox_DropDownClosed(object? sender, EventArgs e)
+    {
+        // Chosen from the open list with Enter or a click.
+        if (Equals(IsoBox.SelectedItem, NewVmViewModel.BrowseChoice)) Dispatcher.BeginInvoke(BrowseForIso);
+    }
+
+    private void IsoBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        // Arrowed onto in the closed box, it only shows; Enter then opens the dialog, rather than
+        // Create, the window's default button.
+        if (e.Key == Key.Enter && !IsoBox.IsDropDownOpen && _vm.IsoPath == NewVmViewModel.BrowseChoice)
+        {
+            e.Handled = true;
+            BrowseForIso();
+        }
+    }
+
+    private void BrowseForIso()
     {
         var dialog = new OpenFileDialog
         {
@@ -125,7 +151,8 @@ public partial class NewVmWindow : Window
             Filter = "Disc images (*.iso)|*.iso",
             InitialDirectory = IsoFinder.DownloadsFolder,
         };
-        if (dialog.ShowDialog(this) == true) _vm.IsoPath = dialog.FileName;
+        if (dialog.ShowDialog(this) == true) _vm.ChooseBrowsedIso(dialog.FileName);
+        else if (_vm.IsoPath == NewVmViewModel.BrowseChoice) _vm.IsoPath = _isoBeforeBrowse;
         IsoBox.Focus();
     }
 
