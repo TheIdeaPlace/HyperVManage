@@ -78,21 +78,21 @@ jobs:
           "Version=$version" | Out-File $env:GITHUB_ENV -Append
           Write-Host "Version $version"
 
-      # Only where the relay is set up (relay/README.md); otherwise the file keeps its empty
-      # values and Report a Bug sends through GitHub's form in the browser.
+      # The shared App Kit relay (TheIdeaPlace/app-kit), where it's set up for this repo; otherwise
+      # the file keeps its empty values and Report a Bug sends through GitHub's form in the browser.
       - name: Point Report a Bug at the relay
-        if: env.SIGN == 'true' && vars.BUG_REPORT_RELAY_URL != ''
+        if: env.SIGN == 'true' && vars.APPKIT_RELAY_URL != ''
         shell: pwsh
         env:
-          RELAY_URL: ${{ vars.BUG_REPORT_RELAY_URL }}
-          RELAY_KEY: ${{ secrets.BUG_REPORT_RELAY_KEY }}
+          RELAY_URL: ${{ vars.APPKIT_RELAY_URL }}
+          RELAY_KEY: ${{ secrets.APPKIT_RELAY_KEY }}
         run: |
           # Both go into a C# string, so only characters that can't end or change one.
           $uri = $null
           if (-not [Uri]::TryCreate($env:RELAY_URL, 'Absolute', [ref]$uri) -or $uri.Scheme -ne 'https' -or $env:RELAY_URL -notmatch '^[A-Za-z0-9:/._~-]+$') {
-            throw 'BUG_REPORT_RELAY_URL must be a plain https address.'
+            throw 'APPKIT_RELAY_URL must be a plain https address.'
           }
-          if ($env:RELAY_KEY -notmatch '^[A-Za-z0-9_-]{20,}$') { throw 'BUG_REPORT_RELAY_KEY must be at least 20 letters, digits, - or _ (see relay/README.md).' }
+          if ($env:RELAY_KEY -notmatch '^[!#-\[\]-~]{20,}$') { throw 'APPKIT_RELAY_KEY must be at least 20 printable characters, with no quote or backslash.' }
           @"
           namespace HyperVManage.Services;
           public sealed partial class BugReportService
@@ -286,7 +286,7 @@ jobs:
           administrator rights when it starts. Everything is signed by "kelly ford"; Windows
           SmartScreen may still ask about a new download until the publisher builds up reputation.
 
-          Found a problem? Help, Report a Bug. Read the [README](https://github.com/kellylford/HyperVManage#readme).
+          Found a problem? Help, Report a Bug. Read the [README](https://github.com/TheIdeaPlace/HyperVManage#readme).
           '@
           $pre = @()
           if ($version.StartsWith('0.')) {

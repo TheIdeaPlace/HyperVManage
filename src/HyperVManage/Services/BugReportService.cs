@@ -35,9 +35,9 @@ public interface IBugReportService
 }
 
 /// <summary>
-/// Files bug reports as GitHub issues on kellylford/HyperVManage through the bug-report relay
-/// (relay/README.md), so nobody needs a GitHub account and nothing that can write to the
-/// repository ships in the app. The relay key compiled in only lets a report be filed, and can
+/// Files bug reports as GitHub issues on TheIdeaPlace/HyperVManage through the shared App Kit
+/// bug-report relay (TheIdeaPlace/app-kit, relay/), so nobody needs a GitHub account and nothing
+/// that can write to the repository ships in the app. The relay key compiled in only lets a report be filed, and can
 /// be changed without touching any account. A build without one, or a relay that fails, falls
 /// back to GitHub's issue form in the browser, with the report on the clipboard as well.
 /// </summary>
@@ -53,6 +53,9 @@ public sealed partial class BugReportService : IBugReportService, IDisposable
 
     // The title has its own limit, so a long one can never crowd the report out entirely.
     private const int MaxFormTitleLength = 100;
+
+    /// <summary>Hyper-V Manage's entry in the relay's list of apps.</summary>
+    internal const string RelayAppId = "hypervmanage";
 
     private readonly string _relayUrl;
     private readonly string _relayKey;
@@ -81,7 +84,10 @@ public sealed partial class BugReportService : IBugReportService, IDisposable
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, _relayUrl);
-            request.Headers.Add("X-HyperVManage-Key", _relayKey);
+            // The shared relay serves every app: the id says which repository to file in, and the
+            // key is this app's own.
+            request.Headers.Add("X-AppKit-App", RelayAppId);
+            request.Headers.Add("X-AppKit-Key", _relayKey);
             // Labels are the relay's to choose: a key taken out of the app mustn't pick them.
             request.Content = new StringContent(
                 JsonSerializer.Serialize(new { title = report.Summary.Trim(), body = BuildText(report) }),
