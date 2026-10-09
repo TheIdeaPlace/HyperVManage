@@ -26,22 +26,45 @@ public sealed class IsoHistory(string? file = null) : IIsoHistory
     private readonly string _file = file ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HyperVManage", "recent-isos.json");
 
-    public IReadOnlyList<string> Recent() => Read().Where(File.Exists).ToList();
+    public IReadOnlyList<string> Recent() => Read().Where(StillThere).ToList();
+
+    /// <summary>A file on this PC that has gone isn't offered. One on a network share is offered
+    /// unchecked: asking a server that isn't there would hold up the window for its timeout, and
+    /// Create checks the file anyway.</summary>
+    internal static bool StillThere(string path) => IsOnNetwork(path) || File.Exists(path);
+
+    private static bool IsOnNetwork(string path) => path.StartsWith(@"\\", StringComparison.Ordinal);
 
     public void Remember(string path)
     {
+        string? temp = null;
         try
         {
-            var full = Path.GetFullPath(path);
-            var list = Read().Where(p => !p.Equals(full, StringComparison.OrdinalIgnoreCase)).Prepend(full)
-                .Take(MaxRemembered).ToList();
+            var list = Add(Read(), path);
             Directory.CreateDirectory(Path.GetDirectoryName(_file)!);
-            var temp = _file + ".tmp";
+            // A name of its own, so two copies of the app building at once don't share one; then
+            // moved over the list in one step, so it's never half written.
+            temp = $"{_file}.{Guid.NewGuid():N}.tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(list));
             File.Move(temp, _file, overwrite: true);
+            temp = null;
         }
         catch (Exception) { }
+        finally
+        {
+            if (temp is not null) try { File.Delete(temp); } catch (Exception) { }
+        }
     }
+
+    /// <summary>The list with an ISO put first, once, and no more than <see cref="MaxRemembered"/>.</summary>
+    internal static List<string> Add(IEnumerable<string> list, string path)
+    {
+        var full = Path.GetFullPath(path);
+        return list.Where(p => !p.Equals(full, StringComparison.OrdinalIgnoreCase)).Prepend(full).Take(MaxRemembered).ToList();
+    }
+
+    private static bool IsIsoPath(string? p) =>
+        !string.IsNullOrWhiteSpace(p) && Path.IsPathFullyQualified(p) && p.EndsWith(".iso", StringComparison.OrdinalIgnoreCase);
 
     private List<string> Read()
     {
@@ -49,7 +72,7 @@ public sealed class IsoHistory(string? file = null) : IIsoHistory
         {
             if (!File.Exists(_file)) return [];
             return JsonSerializer.Deserialize<List<string>>(File.ReadAllText(_file))?
-                .Where(p => !string.IsNullOrWhiteSpace(p) && Path.IsPathFullyQualified(p)).ToList() ?? [];
+                .Where(IsIsoPath).ToList() ?? [];
         }
         catch (Exception)
         {
@@ -58,14 +81,10 @@ public sealed class IsoHistory(string? file = null) : IIsoHistory
     }
 }
 
-/// <summary>For demo mode and tests: remembers nothing past the window.</summary>
+/// <summary>For demo mode and tests: the same list, kept only until the app closes.</summary>
 public sealed class InMemoryIsoHistory : IIsoHistory
 {
-    private readonly List<string> _paths = [];
-    public IReadOnlyList<string> Recent() => _paths.ToList();
-    public void Remember(string path)
-    {
-        _paths.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase));
-        _paths.Insert(0, path);
-    }
+    private List<string> _paths = [];
+    public IReadOnlyList<string> Recent() => _paths.Where(IsoHistory.StillThere).ToList();
+    public void Remember(string path) => _paths = IsoHistory.Add(_paths, path);
 }

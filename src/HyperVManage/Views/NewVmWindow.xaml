@@ -2,7 +2,11 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="New Virtual Machine" Width="600" Height="640" MinHeight="420"
+        xmlns:views="clr-namespace:HyperVManage.Views"
         WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <views:IsoSpokenNameConverter x:Key="IsoSpokenName"/>
+    </Window.Resources>
     <Grid Margin="14">
 
         <!-- The form -->
@@ -22,8 +26,16 @@
                          when merely arrowed onto. Text search is off: it would complete a typed path. -->
                     <ComboBox x:Name="IsoBox" AutomationProperties.Name="Windows ISO" IsEditable="True" IsTextSearchEnabled="False"
                               ItemsSource="{Binding IsoChoices}" Text="{Binding IsoPath, UpdateSourceTrigger=PropertyChanged}"
-                              DropDownClosed="IsoBox_DropDownClosed" PreviewKeyDown="IsoBox_PreviewKeyDown"
-                              AutomationProperties.HelpText="Leave empty to use the newest Windows ISO in your Downloads folder."/>
+                              DropDownClosed="IsoBox_DropDownClosed" PreviewKeyDown="IsoBox_PreviewKeyDown">
+                        <!-- In the open list each ISO is read file name first, then its folder, so ISOs in
+                             one folder can be told apart by ear; the box itself shows the full path. -->
+                        <ComboBox.ItemContainerStyle>
+                            <Style TargetType="ComboBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Converter={StaticResource IsoSpokenName}}"/>
+                                <EventSetter Event="PreviewMouseLeftButtonUp" Handler="BrowseItem_MouseUp"/>
+                            </Style>
+                        </ComboBox.ItemContainerStyle>
+                    </ComboBox>
                 </DockPanel>
                 <!-- Microsoft's download pages: this PC's kind first. Each link is a Tab stop and
                      opens in the browser with Enter. Text and addresses are set in code. -->
