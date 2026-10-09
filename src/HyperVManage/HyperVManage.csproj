@@ -27,7 +27,7 @@
   <ItemGroup>
     <!-- The same script as hyperv-rdp-vm/, not a copy: New VM runs exactly what the
          command line runs, so the two can never drift apart. -->
-    <EmbeddedResource Include="..\..\..\hyperv-rdp-vm\New-HyperVRdpVM.ps1" LogicalName="New-HyperVRdpVM.ps1" />
+    <EmbeddedResource Include="..\..\hyperv-rdp-vm\New-HyperVRdpVM.ps1" LogicalName="New-HyperVRdpVM.ps1" />
   </ItemGroup>
 
   <ItemGroup>

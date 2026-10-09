@@ -197,7 +197,7 @@ public class ScriptBuildingTests
     private static string ServiceScriptFor(VmAction action)
     {
         // RunActionAsync builds and runs in one go; read its verb table through the source instead.
-        var src = File.ReadAllText(Path.Combine(RepoRoot(), "hyperv-manage", "src", "HyperVManage", "Services", "PowerShellHyperVService.cs"));
+        var src = File.ReadAllText(Path.Combine(RepoRoot(), "src", "HyperVManage", "Services", "PowerShellHyperVService.cs"));
         var line = src.Split('\n').First(l => l.Contains($"VmAction.{action} =>"));
         return line;
     }
@@ -370,7 +370,7 @@ public class ScriptBuildingTests
     {
         // Windows refuses to start an exe whose manifest isn't well-formed XML, with nothing but a
         // "side-by-side configuration" error. A "--" in a comment did exactly that once.
-        var path = Path.Combine(RepoRoot(), "hyperv-manage", "src", "HyperVManage", "app.manifest");
+        var path = Path.Combine(RepoRoot(), "src", "HyperVManage", "app.manifest");
         System.Xml.Linq.XDocument.Load(path);
     }
 

@@ -19,7 +19,7 @@ unattended install and leaves it ready to sign in to with Remote Desktop, from
 this PC or from any other computer on your network.
 
 To do the same from a window instead of the command line, and to manage the VM
-afterwards, use [Hyper-V Manage](../hyperv-manage/), which runs this script.
+afterwards, use [Hyper-V Manage](../README.md), which runs this script.
 
 Remote Desktop is the way to get proper audio out of a Hyper-V VM for JAWS,
 NVDA or Narrator, so the script finishes by opening a Remote Desktop connection

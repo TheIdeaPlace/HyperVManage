@@ -6,8 +6,8 @@
 > against the pretend VMs of demo mode. See [Testing it on a real machine](#testing-it-on-a-real-machine).
 
 A Windows app for managing Hyper-V virtual machines, built screen reader first. It is the
-Windows counterpart of [Parallels Manager](../parallels-manager/), and it builds new Windows
-VMs with [New-HyperVRdpVM.ps1](../hyperv-rdp-vm/), so a VM made from the app is exactly the
+Windows counterpart of [Parallels Manager](https://github.com/kellylford/TheWorkBench/tree/main/parallels-manager), and it builds new Windows
+VMs with [New-HyperVRdpVM.ps1](hyperv-rdp-vm/), so a VM made from the app is exactly the
 VM the script makes: ready to sign in to with Remote Desktop, with sound.
 
 It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
@@ -260,7 +260,7 @@ hyperv-manage/
 ```
 
 - **The script is embedded, not copied.** The project embeds
-  `../hyperv-rdp-vm/New-HyperVRdpVM.ps1` itself, and a test checks the embedded copy is
+  `hyperv-rdp-vm/New-HyperVRdpVM.ps1` itself, and a test checks the embedded copy is
   byte-for-byte the one in the repository, so the app and the command line can't drift.
 - **No value is ever pasted into PowerShell as code.** Names, paths and passwords go through
   `Ps.Quote`, and a test checks PowerShell's own parser reads each one back unchanged. Another

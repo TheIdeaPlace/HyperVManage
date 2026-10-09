@@ -1,2 +1,17 @@
 build/
 TestResults/
+dist/
+
+# .NET build output
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+.vs/
+
+# Velopack output
+Releases/
+*.nupkg
+
+# Claude Code session data
+.claude/

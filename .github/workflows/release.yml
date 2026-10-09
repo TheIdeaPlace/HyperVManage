@@ -1,11 +1,10 @@
 name: Release Hyper-V Manage
 
-# TheWorkBench holds several unrelated projects, so releases are scoped by tag prefix. A tag
-# like hyperv-manage-v1.0.0 builds Hyper-V Manage for x64 and Arm64, signs both apps and the
+# A tag like v1.0.0 builds Hyper-V Manage for x64 and Arm64, signs both apps and the
 # VM script with Azure Artifact Signing, checks every signature, and publishes a release.
 #
-#   git tag hyperv-manage-v1.0.0
-#   git push origin hyperv-manage-v1.0.0
+#   git tag v1.0.0
+#   git push origin v1.0.0
 #
 # Run by hand (Actions, Run workflow) or for a pull request, it builds and tests the same way but
 # signs nothing and publishes nothing; the unsigned files are kept as a workflow artifact.
@@ -18,14 +17,12 @@ name: Release Hyper-V Manage
 on:
   push:
     tags:
-      - 'hyperv-manage-v*'
+      - 'v*'
   # A pull request that touches either project builds and tests it the same way, unsigned, so a
   # broken release is found before the tag rather than after.
   pull_request:
     paths:
-      - 'hyperv-manage/**'
-      - 'hyperv-rdp-vm/**'
-      - '.github/workflows/release-hyperv-manage.yml'
+      - '**'
   workflow_dispatch:
 
 permissions:
@@ -37,7 +34,7 @@ jobs:
     runs-on: windows-latest
     environment: azure-signing
     env:
-      SIGN: ${{ startsWith(github.ref, 'refs/tags/hyperv-manage-v') }}
+      SIGN: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -49,24 +46,24 @@ jobs:
       # tests that need administrator rights skip themselves.
       - name: Test
         shell: pwsh
-        run: dotnet test hyperv-manage/tests/HyperVManage.Tests -c Release
+        run: dotnet test tests/HyperVManage.Tests -c Release
 
       # The tag is the version: MSBuild reads the Version environment variable as the
-      # property, so hyperv-manage-v1.2.0 builds 1.2.0, which About shows. A hand run keeps the
+      # property, so v1.2.0 builds 1.2.0, which About shows. A hand run keeps the
       # project's own version.
       - name: Take the version from the tag
         if: env.SIGN == 'true'
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^hyperv-manage-v', ''
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "The tag must be hyperv-manage-v<major>.<minor>.<patch>, not $env:GITHUB_REF_NAME." }
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "The tag must be v<major>.<minor>.<patch>, not $env:GITHUB_REF_NAME." }
           "Version=$version" | Out-File $env:GITHUB_ENV -Append
 
       - name: Build both apps
         shell: cmd
         run: |
-          call "hyperv-manage\Build App.cmd" x64 || exit /b 1
-          call "hyperv-manage\Build App.cmd" arm64 || exit /b 1
+          call "Build App.cmd" x64 || exit /b 1
+          call "Build App.cmd" arm64 || exit /b 1
 
       # The script for people who'd rather not use the app goes alongside it. The repository's
       # copy stays unsigned: the app embeds it and a test checks it byte for byte.
@@ -74,8 +71,8 @@ jobs:
         shell: pwsh
         run: |
           $dist = New-Item -ItemType Directory -Force dist
-          Copy-Item 'hyperv-manage\build\x64\HyperVManage.exe' "$dist\HyperVManage-x64.exe"
-          Copy-Item 'hyperv-manage\build\arm64\HyperVManage.exe' "$dist\HyperVManage-arm64.exe"
+          Copy-Item 'build\x64\HyperVManage.exe' "$dist\HyperVManage-x64.exe"
+          Copy-Item 'build\arm64\HyperVManage.exe' "$dist\HyperVManage-arm64.exe"
           $script = New-Item -ItemType Directory -Force "$dist\hyperv-rdp-vm"
           Copy-Item 'hyperv-rdp-vm\New-HyperVRdpVM.ps1', 'hyperv-rdp-vm\Create VM.cmd', 'hyperv-rdp-vm\README.md' $script
           Get-ChildItem $dist -Recurse -File | Select-Object FullName, Length
@@ -153,10 +150,10 @@ jobs:
           Both apps and the script are signed by "kelly ford". Windows SmartScreen may still ask
           about a new download until the publisher builds up reputation.
 
-          Read the [Hyper-V Manage README](https://github.com/kellylford/TheWorkBench/tree/main/hyperv-manage)
-          and the [script's README](https://github.com/kellylford/TheWorkBench/tree/main/hyperv-rdp-vm).
+          Read the [Hyper-V Manage README](https://github.com/kellylford/HyperVManage#readme)
+          and the [script's README](https://github.com/kellylford/HyperVManage/tree/main/hyperv-rdp-vm).
           '@
-          $version = $env:GITHUB_REF_NAME -replace '^hyperv-manage-v', ''
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
           # Before 1.0 a release is a pre-release, and says why.
           $pre = @()
           if ($version.StartsWith('0.')) {
