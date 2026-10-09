@@ -5,11 +5,33 @@ using System.Windows;
 using HyperVManage.Services;
 using HyperVManage.ViewModels;
 using HyperVManage.Views;
+using Velopack;
 
 namespace HyperVManage;
 
 public partial class App : Application
 {
+    // Velopack first, before WPF: when Setup installs, updates or uninstalls the app it runs it
+    // with an argument of its own, does its work here and ends the process. On a normal start it
+    // does nothing.
+    [STAThread]
+    public static void Main(string[] args)
+    {
+        VelopackApp.Build().Run();
+        var app = new App();
+        app.InitializeComponent();
+        app.Run();
+    }
+
+    private IUpdateService? _updates;
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        // Arms installing an update downloaded while the app ran.
+        _updates?.Dispose();
+        base.OnExit(e);
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -48,9 +70,18 @@ public partial class App : Application
 
         IHyperVService service = demo ? new DemoHyperVService() : new PowerShellHyperVService();
         var vm = new MainViewModel(service, demo ? new InMemoryCredentialStore() : new WindowsCredentialStore());
-        var window = new MainWindow(vm, demo);
+        // --update-feed <folder or address>: Velopack packages to update from instead of GitHub,
+        // for trying an update without publishing one.
+        _updates = new UpdateService(ArgumentAfter(e.Args, "--update-feed"));
+        var window = new MainWindow(vm, demo, new UpdateChecker(_updates), new BugReportService(demo));
         MainWindow = window;
         window.Show();
+    }
+
+    private static string? ArgumentAfter(string[] args, string name)
+    {
+        var i = Array.FindIndex(args, a => a.Equals(name, StringComparison.OrdinalIgnoreCase));
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
     }
 
     private static bool IsAdministrator() =>

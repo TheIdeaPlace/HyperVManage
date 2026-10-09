@@ -10,8 +10,14 @@
     <RootNamespace>HyperVManage</RootNamespace>
     <Product>Hyper-V Manage</Product>
     <AssemblyTitle>Hyper-V Manage</AssemblyTitle>
-    <Version>1.0.0</Version>
+    <!-- The release workflow sets the version (the tag's, or this one with -test.N added) through
+         the Version environment variable, which a plain property here would override. -->
+    <Version Condition="'$(Version)' == ''">0.9.3</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Velopack's hooks have to run before WPF starts (install, update and uninstall end the
+         process there), so App has a Main of its own and App.xaml is built as a page. -->
+    <StartupObject>HyperVManage.App</StartupObject>
     <!-- One exe to share: the VM-creation script is embedded rather than shipped beside it,
          and "Build App.cmd" publishes it single-file and self-contained, so nothing else needs
          installing. Self-contained is set there, not here: a test project can't reference a
@@ -22,6 +28,13 @@
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <!-- The same version as the vpk that packs the installer, in release.yml. -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
   </ItemGroup>
 
   <ItemGroup>

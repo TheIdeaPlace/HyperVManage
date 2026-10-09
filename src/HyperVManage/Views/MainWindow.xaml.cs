@@ -17,11 +17,28 @@ public partial class MainWindow : Window
     /// <summary>The open screenshot viewers, one per VM id.</summary>
     private readonly Dictionary<string, ScreenshotWindow> _screenshots = [];
 
-    public MainWindow(MainViewModel vm, bool demo)
+    private readonly UpdateChecker? _updates;
+    private readonly IBugReportService? _bugReports;
+
+    /// <param name="updates">Checks for updates at start and from Help; without it, Check for
+    /// Updates says it isn't available.</param>
+    /// <param name="bugReports">Sends Report a Bug's reports; without it, one that only goes
+    /// through the browser is made when asked.</param>
+    public MainWindow(MainViewModel vm, bool demo, UpdateChecker? updates = null, IBugReportService? bugReports = null)
     {
         InitializeComponent();
         _vm = vm;
         _demo = demo;
+        _updates = updates;
+        _bugReports = bugReports;
+        if (updates is not null)
+        {
+            updates.Report = text => { _vm.StatusText = text; Announcer.Announce(this, text); };
+            updates.Confirm = question => MessageBox.Show(this, question, "Check for Updates",
+                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes) == MessageBoxResult.Yes;
+            updates.BuildRunning = () => _newVmWindow is { IsBuilding: true };
+            updates.OpenPage = Browser.Open;
+        }
 
         // Access keys D and W: Help already uses K and A.
         var downloads = IsoDownloads.ForThisPcFirst(IsoFinder.HostIsArm64);
@@ -56,6 +73,8 @@ public partial class MainWindow : Window
         {
             await vm.StartAsync();
             FocusSelectedRow();
+            // After the list, so its count is heard first; quiet unless there is an update.
+            if (!demo && updates is not null) await updates.CheckAtStartAsync();
         };
         Closed += (_, _) =>
         {
@@ -254,13 +273,29 @@ public partial class MainWindow : Window
         catch (Exception ex) { Announcer.Announce(this, $"Couldn't open the download page: {ex.Message}"); }
     }
 
-    /// <summary>The build's version, from the project or the release tag; .NET adds "+commit"
-    /// to the informational version, which isn't for people.</summary>
-    internal static string AppVersion =>
-        (System.Reflection.Assembly.GetExecutingAssembly()
-            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
-            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "")
-        .Split('+')[0];
+    private void ReportBug_Click(object sender, RoutedEventArgs e)
+    {
+        var service = _bugReports ?? new BugReportService(_demo);
+        try { ReportBugWindow.Show(this, new ReportBugViewModel(service)); }
+        finally { if (_bugReports is null) ((IDisposable)service).Dispose(); }
+    }
+
+    private async void CheckForUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        // async void, as an event handler is: UpdateChecker never throws, but nothing here may end the app.
+        try
+        {
+            if (_updates is null) Announcer.Announce(this, "Checking for updates isn't available in this window.");
+            else await _updates.CheckNowAsync();
+        }
+        catch (Exception ex)
+        {
+            _vm.StatusText = $"Couldn't check for updates. {ex.Message}";
+            Announcer.Announce(this, _vm.StatusText);
+        }
+    }
+
+    internal static string AppVersion => AppInfo.Version;
 
     private void About_Click(object sender, RoutedEventArgs e) =>
         MessageBox.Show(this,

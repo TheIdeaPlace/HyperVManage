@@ -56,6 +56,8 @@
                 <MenuItem x:Name="IsoMenuOther" Click="IsoMenu_Click"/>
                 <Separator/>
                 <MenuItem Header="_Keyboard Shortcuts" Click="Shortcuts_Click"/>
+                <MenuItem Header="Report a _Bug…" Click="ReportBug_Click"/>
+                <MenuItem Header="Check for _Updates…" Click="CheckForUpdates_Click"/>
                 <MenuItem Header="_About Hyper-V Manage" Click="About_Click"/>
             </MenuItem>
         </Menu>

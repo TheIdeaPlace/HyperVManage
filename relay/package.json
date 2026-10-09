@@ -1,0 +1,11 @@
+{
+  "name": "hyperv-manage-bug-relay",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker that files Hyper-V Manage bug reports as a GitHub App",
+  "//": "No dependencies on purpose: wrangler can't be installed on Windows on Arm, so CI runs it with npx wrangler@4, and the tests use only Node's standard library.",
+  "scripts": {
+    "test": "node test/jwt.test.js"
+  }
+}

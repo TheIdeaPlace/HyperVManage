@@ -1,6 +1,6 @@
 # Hyper-V Manage
 
-> **Status: in use on real Hyper-V, not yet released.** On 2 October 2026 it built Windows VMs
+> **Status: pre-release.** On 2 October 2026 it built Windows VMs
 > end to end on an Arm64 PC and an x64 PC, connected to them with Remote Desktop, opened the
 > console, and paused one. Settings, Checkpoint, Apply Checkpoint, Clone and Delete have so far been exercised only
 > against the pretend VMs of demo mode. See [Testing it on a real machine](#testing-it-on-a-real-machine).
@@ -100,9 +100,43 @@ through `prlctl`, so anything the app does can be repeated by hand.
 | Administrator rights | The app asks when it starts, as the script does |
 | .NET 10 SDK | Only for building it |
 
+## Installing
+
+From the [latest release](https://github.com/kellylford/HyperVManage/releases):
+
+- **HyperVManage-Setup-x64.exe** (Intel and AMD) or **HyperVManage-Setup-arm64.exe** (Arm)
+  installs it for your account, in `%LocalAppData%\HyperVManage`, with a Start menu entry. Remove
+  it from Settings, Apps, like any other app.
+- **HyperVManage-x64.exe** or **HyperVManage-arm64.exe** is the same app as one program to run from
+  anywhere, with nothing to install.
+- **The zip** holds New-HyperVRdpVM.ps1, the script the app runs to build a VM, for the command
+  line.
+
+### Updates
+
+An installed copy checks for a new version each time it starts. If there is one, it says so,
+downloads it while you work, and installs it when you close Hyper-V Manage, so the next start is
+the new version. Help, Check for Updates checks straight away and offers to install now, which
+closes Hyper-V Manage and opens the new version; it won't while New Virtual Machine is building
+one. The single exe can't update itself: it says when there's a new version, and Check for
+Updates offers its download page.
+
+### Reporting a bug
+
+Help, Report a Bug asks what happened, what you expected and how to make it happen, and shows
+exactly what will be sent: that, the app's version, Windows' version, the processor, whether it
+was installed, and which screen reader is running. Nothing about your VMs, network or account.
+
+- **Send** files it as a public issue on GitHub, with no GitHub account needed, in a release
+  built with the bug-report relay (see [relay/README.md](relay/README.md)).
+- **Send with GitHub** opens GitHub's new issue form in your browser with the report filled in,
+  and copies the whole report to the clipboard, since a long one is cut short there. Sending it
+  needs a GitHub account. It's the only way in a build without the relay.
+
 ## Using it
 
-Run `HyperVManage.exe` and choose Yes when Windows asks for permission.
+Run Hyper-V Manage from the Start menu, or `HyperVManage.exe`, and choose Yes when Windows asks
+for permission.
 
 Focus starts on the first VM in the list. Each one reads as its name, state, address and
 network, for example "Win11-RDP, Running, 10.0.0.41, External Wi-Fi".
@@ -214,16 +248,26 @@ like the other apps; see `The-Idea-Place-Projects/signing/windows.md`.
   powershell -ExecutionPolicy Bypass -File "Sign Files.ps1" build\arm64\HyperVManage.exe
   ```
 
-- **Releases:** pushing a tag `hyperv-manage-v<major>.<minor>.<patch>` runs
-  `.github/workflows/release-hyperv-manage.yml`. It tests, builds both apps with the tag as their
-  version, signs them and the VM script, checks every signature, and publishes a GitHub release
-  with `HyperVManage-x64.exe`, `HyperVManage-arm64.exe` and a zip of the script. A pull request
-  touching either project runs the same build and tests, unsigned.
+- **Releases:** pushing a tag `v<major>.<minor>.<patch>` runs `.github/workflows/release.yml`.
+  It tests, builds both apps with the tag as their version, signs them and the VM script, packs a
+  Velopack installer and update feed for each processor (x64 on Velopack's `win` channel, Arm64
+  on `win-arm64`), checks every signature, including inside the packages, and publishes a GitHub
+  release. Its notes start with `docs/release-notes/v<version>.md` when there is one. Before 1.0
+  a release is a GitHub pre-release, and installed copies still see it as an update.
 
   ```bat
-  git tag hyperv-manage-v1.0.0
-  git push origin hyperv-manage-v1.0.0
+  git tag v0.9.3
+  git push origin v0.9.3
   ```
+
+  Set `<Version>` in `src/HyperVManage/HyperVManage.csproj` to the next release's number. A pull
+  request, or a run by hand, builds the same files at that version with `-test.<run>.<attempt>`
+  added and keeps them as a workflow artifact; a hand run signs them if asked. A test install
+  sorts below the release of its number, so it updates to that release.
+
+- **Trying an update without a release:** pack two versions with `vpk pack` (as the workflow
+  does) into a folder, install the older one, and start it with `--update-feed <folder>`. Help,
+  Check for Updates then finds the newer one there.
 
 The repository's `New-HyperVRdpVM.ps1` stays unsigned: the app embeds it and a test checks the
 embedded copy byte for byte. Only the copies handed out are signed.
@@ -242,10 +286,11 @@ is on screen, so they only run with `HYPERVMANAGE_RUN_INPUT_TESTS=1` set.
 ## How it is put together
 
 ```
-hyperv-manage/
-  Build App.cmd                 Builds build\<arch>\HyperVManage.exe
-  src/HyperVManage/
-    App.xaml.cs                 Elevation, Hyper-V check, --demo
+Build App.cmd                   Builds build\<arch>\HyperVManage.exe
+hyperv-rdp-vm/                  New-HyperVRdpVM.ps1, the script that builds a VM
+relay/                          The Cloudflare Worker Report a Bug sends through
+src/HyperVManage/
+    App.xaml.cs                 Velopack's hooks, elevation, Hyper-V check, --demo
     Models/VmInfo.cs            A VM, and which actions each state allows
     Services/
       PowerShellRunner.cs       Runs powershell.exe; Ps.Quote makes every value a literal
@@ -254,9 +299,12 @@ hyperv-manage/
       NewVmScript.cs            Runs the embedded New-HyperVRdpVM.ps1
       RemoteDesktop.cs          Connection files, and choosing a name over an address
       ScreenPicture.cs          Hyper-V's screen pixels made into a PNG
-    ViewModels/                 Main list, Settings, New VM, the screenshot viewer
+      UpdateService.cs          Velopack updates, or GitHub's releases for the single exe
+      BugReportService.cs       Report a Bug: the relay, or GitHub's form in the browser
+      Browser.cs                Opens pages as the user, not as administrator
+    ViewModels/                 Main list, Settings, New VM, the screenshot viewer, updates, bug reports
     Views/                      The windows
-  tests/HyperVManage.Tests/
+tests/HyperVManage.Tests/
 ```
 
 - **The script is embedded, not copied.** The project embeds
@@ -280,9 +328,15 @@ hyperv-manage/
   PowerShell writes some messages as XML ("#< CLIXML"), including a "Preparing modules for first
   use" progress record. The app drops progress records and turns errors back into plain lines
   before showing or speaking them.
-- **Still to do before others use it:** the single-file exe unpacks some of .NET's own libraries
-  to the user's TEMP when it starts, where another program could replace them. Shipping it
-  installed (for example as an MSIX package, as the Microsoft Store does) avoids that.
+- **The installed copy isn't one bundled exe.** The single exe unpacks some of .NET's own
+  libraries to the user's TEMP when it starts, where another program could replace them, and
+  that first start took 23 seconds in the test VM. The installer packs the app's files as they
+  are, so nothing is unpacked. They're in `%LocalAppData%\HyperVManage`, which programs running as
+  you can write to, as with any per-user install; a per-machine install in Program Files would
+  close that too.
+- **Pages open as you, not as administrator.** Help's links and Report a Bug ask the desktop's own
+  shell to open the page, so the browser never runs elevated. Explorer's command line, used
+  before, can't open an address with a query in it: it opens the Documents folder instead.
 - **VMs are addressed by id.** Hyper-V allows two VMs with the same name, and `Get-VM -Name`
   reads `* ? [ ]` as wildcards, so names are never used to find a VM to act on.
 - **The list is updated in place.** Replacing it would move a screen reader back to the top
