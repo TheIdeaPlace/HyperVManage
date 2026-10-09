@@ -19,7 +19,7 @@ public class UpdateServiceTests
     private static string Releases(params object[] releases) => JsonSerializer.Serialize(releases);
 
     private static object Release(string tag, bool draft = false, string? url = null) =>
-        new { tag_name = tag, draft, html_url = url ?? $"https://github.com/kellylford/HyperVManage/releases/tag/{tag}" };
+        new { tag_name = tag, draft, html_url = url ?? $"https://github.com/TheIdeaPlace/HyperVManage/releases/tag/{tag}" };
 
     [Fact]
     public void NewestRelease_IsTheHighestVersionAboveThisOne_NotTheFirstListed()
@@ -27,7 +27,7 @@ public class UpdateServiceTests
         var json = Releases(Release("v0.9.4"), Release("v0.10.1"), Release("v0.9.2"), Release("v0.10.0"));
         var found = UpdateService.NewestRelease(json, "0.9.3");
         Assert.Equal("0.10.1", found?.Version);
-        Assert.Equal("https://github.com/kellylford/HyperVManage/releases/tag/v0.10.1", found?.Page.AbsoluteUri);
+        Assert.Equal("https://github.com/TheIdeaPlace/HyperVManage/releases/tag/v0.10.1", found?.Page.AbsoluteUri);
     }
 
     [Theory]
@@ -282,7 +282,7 @@ public class UpdateCheckerTests
 
 public class BugReportServiceTests
 {
-    private const string Relay = "https://hyperv-manage-bug-relay.example.workers.dev/report";
+    private const string Relay = "https://appkit-bug-relay.example.workers.dev/report";
 
     private static BugReportService Make(Func<HttpRequestMessage, HttpResponseMessage> answer, string relayUrl = Relay, string relayKey = "key-123") =>
         new(new StubHandler(answer), relayUrl, relayKey, () => "- Hyper-V Manage 0.9.3\n");
@@ -300,16 +300,17 @@ public class BugReportServiceTests
         {
             sent = r;
             body = r.Content!.ReadAsStringAsync().Result;
-            return Json(HttpStatusCode.Created, """{"issueUrl":"https://github.com/kellylford/HyperVManage/issues/12","number":12}""");
+            return Json(HttpStatusCode.Created, """{"issueUrl":"https://github.com/TheIdeaPlace/HyperVManage/issues/12","number":12}""");
         });
         Assert.True(service.CanSend);
         var result = await service.SendAsync(Report, TestContext.Current.CancellationToken);
 
         Assert.True(result.Sent);
-        Assert.Equal("https://github.com/kellylford/HyperVManage/issues/12", result.IssueUrl!.AbsoluteUri);
+        Assert.Equal("https://github.com/TheIdeaPlace/HyperVManage/issues/12", result.IssueUrl!.AbsoluteUri);
         Assert.Equal(HttpMethod.Post, sent!.Method);
         Assert.Equal(Relay, sent.RequestUri!.AbsoluteUri);
-        Assert.Equal("key-123", Assert.Single(sent.Headers.GetValues("X-HyperVManage-Key")));
+        Assert.Equal("hypervmanage", Assert.Single(sent.Headers.GetValues("X-AppKit-App")));
+        Assert.Equal("key-123", Assert.Single(sent.Headers.GetValues("X-AppKit-Key")));
         using var doc = JsonDocument.Parse(body!);
         Assert.Equal("Clone fails", doc.RootElement.GetProperty("title").GetString());
         Assert.Equal(service.BuildText(Report), doc.RootElement.GetProperty("body").GetString());
@@ -319,8 +320,8 @@ public class BugReportServiceTests
 
     [Theory]
     [InlineData("https://github.com/someone-else/repo/issues/1")]
-    [InlineData("http://github.com/kellylford/HyperVManage/issues/1")]
-    [InlineData("https://evil.example/kellylford/HyperVManage/issues/1")]
+    [InlineData("http://github.com/TheIdeaPlace/HyperVManage/issues/1")]
+    [InlineData("https://evil.example/TheIdeaPlace/HyperVManage/issues/1")]
     [InlineData("not a url")]
     public async Task Send_RefusesAnIssueThatIsntOnThisRepository(string url)
     {
@@ -377,7 +378,7 @@ public class BugReportServiceTests
     [Theory]
     [InlineData("", "key")]
     [InlineData(Relay, "")]
-    [InlineData("http://hyperv-manage-bug-relay.example.workers.dev/report", "key")]
+    [InlineData("http://appkit-bug-relay.example.workers.dev/report", "key")]
     public async Task WithoutARelay_NothingIsSent(string url, string key)
     {
         var asked = false;
@@ -409,7 +410,7 @@ public class BugReportServiceTests
     {
         using var service = Make(_ => new HttpResponseMessage(HttpStatusCode.OK));
         var url = service.BuildIssueFormUrl(new BugReport("A & B?", "x", "", ""));
-        Assert.StartsWith("https://github.com/kellylford/HyperVManage/issues/new?labels=bug&title=A%20%26%20B%3F&body=", url.AbsoluteUri);
+        Assert.StartsWith("https://github.com/TheIdeaPlace/HyperVManage/issues/new?labels=bug&title=A%20%26%20B%3F&body=", url.AbsoluteUri);
         Assert.Contains(Uri.EscapeDataString("### What happened"), url.AbsoluteUri);
     }
 
@@ -472,10 +473,10 @@ public class ReportBugViewModelTests
             return Task.FromResult(result);
         }
         public string BuildText(BugReport report) => $"{report.WhatHappened}|about";
-        public Uri BuildIssueFormUrl(BugReport report) => new("https://github.com/kellylford/HyperVManage/issues/new?title=" + report.Summary);
+        public Uri BuildIssueFormUrl(BugReport report) => new("https://github.com/TheIdeaPlace/HyperVManage/issues/new?title=" + report.Summary);
     }
 
-    private static readonly BugReportResult Issue = new(new Uri("https://github.com/kellylford/HyperVManage/issues/7"), null);
+    private static readonly BugReportResult Issue = new(new Uri("https://github.com/TheIdeaPlace/HyperVManage/issues/7"), null);
 
     [Fact]
     public async Task Send_WantsASummaryAndWhatHappened_AndSaysWhichIsMissing()
@@ -539,7 +540,7 @@ public class ReportBugViewModelTests
         await vm.SendCommand.ExecuteAsync(null);
         Assert.Equal(0, reports.Sends);
         Assert.Equal(["It closed.|about"], copied);
-        Assert.Equal("https://github.com/kellylford/HyperVManage/issues/new?title=Crash", Assert.Single(opened).AbsoluteUri);
+        Assert.Equal("https://github.com/TheIdeaPlace/HyperVManage/issues/new?title=Crash", Assert.Single(opened).AbsoluteUri);
         Assert.Contains("needs a GitHub account", vm.StatusText);
     }
 
@@ -576,7 +577,7 @@ public class ReportBugViewModelTests
         public bool CanSend => true;
         public Task<BugReportResult> SendAsync(BugReport report, CancellationToken cancellationToken = default) { Sends++; return answer; }
         public string BuildText(BugReport report) => "";
-        public Uri BuildIssueFormUrl(BugReport report) => new("https://github.com/kellylford/HyperVManage/issues/new");
+        public Uri BuildIssueFormUrl(BugReport report) => new("https://github.com/TheIdeaPlace/HyperVManage/issues/new");
     }
 
     [Fact]
@@ -610,7 +611,7 @@ public class ReportBugWindowTests
         public bool CanSend => false;
         public Task<BugReportResult> SendAsync(BugReport report, CancellationToken cancellationToken = default) => throw new InvalidOperationException();
         public string BuildText(BugReport report) => "preview";
-        public Uri BuildIssueFormUrl(BugReport report) => new("https://github.com/kellylford/HyperVManage/issues/new");
+        public Uri BuildIssueFormUrl(BugReport report) => new("https://github.com/TheIdeaPlace/HyperVManage/issues/new");
     }
 
     private static void Pump()

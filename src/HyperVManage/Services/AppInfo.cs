@@ -6,8 +6,8 @@ namespace HyperVManage.Services;
 /// <summary>Where Hyper-V Manage lives, and which version this is.</summary>
 public static class AppInfo
 {
-    public const string RepoUrl = "https://github.com/kellylford/HyperVManage";
-    public const string ReleasesApiUrl = "https://api.github.com/repos/kellylford/HyperVManage/releases?per_page=20";
+    public const string RepoUrl = "https://github.com/TheIdeaPlace/HyperVManage";
+    public const string ReleasesApiUrl = "https://api.github.com/repos/TheIdeaPlace/HyperVManage/releases?per_page=20";
 
     /// <summary>The release page for a version, which says what's new in it.</summary>
     public static Uri ReleasePage(string version) => new($"{RepoUrl}/releases/tag/v{version}");

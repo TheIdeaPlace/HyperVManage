@@ -110,7 +110,7 @@ through `prlctl`, so anything the app does can be repeated by hand.
 
 ## Installing
 
-From the [latest release](https://github.com/kellylford/HyperVManage/releases):
+From the [latest release](https://github.com/TheIdeaPlace/HyperVManage/releases):
 
 - **HyperVManage-Setup-x64.exe** (Intel and AMD) or **HyperVManage-Setup-arm64.exe** (Arm)
   installs it for your account, in `%LocalAppData%\HyperVManage`, with a Start menu entry. Remove
@@ -137,7 +137,9 @@ exactly what will be sent: that, the app's version, Windows' version, the proces
 was installed, and which screen reader is running. Nothing about your VMs, network or account.
 
 - **Send** files it as a public issue on GitHub, with no GitHub account needed, in a release
-  built with the bug-report relay (see [relay/README.md](relay/README.md)).
+  built with the shared bug-report relay, which every TheIdeaPlace app uses (see
+  [TheIdeaPlace/app-kit](https://github.com/TheIdeaPlace/app-kit)). Release builds get its address
+  and this app's key from the repository's `APPKIT_RELAY_URL` variable and `APPKIT_RELAY_KEY` secret.
 - **Send with GitHub** opens GitHub's new issue form in your browser with the report filled in,
   and copies the whole report to the clipboard, since a long one is cut short there. Sending it
   needs a GitHub account. It's the only way in a build without the relay.
@@ -297,7 +299,6 @@ is on screen, so they only run with `HYPERVMANAGE_RUN_INPUT_TESTS=1` set.
 ```
 Build App.cmd                   Builds build\<arch>\HyperVManage.exe
 hyperv-rdp-vm/                  New-HyperVRdpVM.ps1, the script that builds a VM
-relay/                          The Cloudflare Worker Report a Bug sends through
 src/HyperVManage/
     App.xaml.cs                 Velopack's hooks, elevation, Hyper-V check, --demo
     Models/VmInfo.cs            A VM, and which actions each state allows
