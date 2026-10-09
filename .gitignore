@@ -15,3 +15,7 @@ Releases/
 
 # Claude Code session data
 .claude/
+
+# Local packing and update-feed tests
+pack/
+feed/

@@ -1,0 +1,57 @@
+<Window x:Class="HyperVManage.Views.ReportBugWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Report a Bug" Width="560" Height="680" MinWidth="420" MinHeight="480"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+
+    <!-- In Tab order: the four boxes, what is sent, the buttons, then how it went. -->
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
+            <TextBlock x:Name="IntroText" TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+            <Label Content="_Summary:" Target="{Binding ElementName=SummaryBox}" Padding="0,0,0,2"/>
+            <TextBox x:Name="SummaryBox" Text="{Binding Summary, UpdateSourceTrigger=PropertyChanged}" MaxLength="200"
+                     AutomationProperties.Name="Summary" Margin="0,0,0,8"/>
+
+            <Label Content="What _happened:" Target="{Binding ElementName=WhatHappenedBox}" Padding="0,0,0,2"/>
+            <TextBox x:Name="WhatHappenedBox" Text="{Binding WhatHappened, UpdateSourceTrigger=PropertyChanged}"
+                     AcceptsReturn="True" TextWrapping="Wrap" Height="70" VerticalScrollBarVisibility="Auto"
+                     AutomationProperties.Name="What happened" Margin="0,0,0,8"/>
+
+            <Label Content="What you _expected:" Target="{Binding ElementName=WhatExpectedBox}" Padding="0,0,0,2"/>
+            <TextBox x:Name="WhatExpectedBox" Text="{Binding WhatExpected, UpdateSourceTrigger=PropertyChanged}"
+                     AcceptsReturn="True" TextWrapping="Wrap" Height="50" VerticalScrollBarVisibility="Auto"
+                     AutomationProperties.Name="What you expected" Margin="0,0,0,8"/>
+
+            <Label Content="Steps to _reproduce:" Target="{Binding ElementName=StepsBox}" Padding="0,0,0,2"/>
+            <TextBox x:Name="StepsBox" Text="{Binding Steps, UpdateSourceTrigger=PropertyChanged}"
+                     AcceptsReturn="True" TextWrapping="Wrap" Height="60" VerticalScrollBarVisibility="Auto"
+                     AutomationProperties.Name="Steps to reproduce" Margin="0,0,0,8"/>
+        </StackPanel>
+
+        <!-- Read-only rather than a label, so it can be arrowed through a line at a time. -->
+        <DockPanel Grid.Row="1">
+            <Label DockPanel.Dock="Top" Content="_What is sent:" Target="{Binding ElementName=PreviewBox}" Padding="0,0,0,2"/>
+            <TextBox x:Name="PreviewBox" Text="{Binding Preview, Mode=OneWay}" IsReadOnly="True" IsReadOnlyCaretVisible="True"
+                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                     AutomationProperties.Name="What is sent"/>
+        </DockPanel>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button x:Name="OpenIssueButton" Content="_Open Issue" Command="{Binding OpenIssueCommand}" MinWidth="90" Margin="0,0,8,0"
+                    Visibility="Collapsed"/>
+            <Button x:Name="SendButton" Content="Se_nd" Command="{Binding SendCommand}" MinWidth="90" Margin="0,0,8,0"/>
+            <Button x:Name="SendYourselfButton" Content="Send with _GitHub" Command="{Binding SendYourselfCommand}" Padding="8,0" Margin="0,0,8,0"/>
+            <Button x:Name="CloseButton" Content="{Binding CloseText}" IsCancel="True" MinWidth="90"/>
+        </StackPanel>
+
+        <TextBlock Grid.Row="3" Text="{Binding StatusText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+    </Grid>
+</Window>
