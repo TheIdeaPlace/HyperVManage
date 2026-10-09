@@ -57,15 +57,18 @@ public sealed partial class BugReportService : IBugReportService, IDisposable
     private readonly string _relayUrl;
     private readonly string _relayKey;
     private readonly HttpClient _http;
-    private readonly Func<string> _environment;
+    // Worked out once: the preview is rebuilt on every keystroke, and finding the screen reader
+    // looks through every running process.
+    private readonly Lazy<string> _environment;
 
-    public BugReportService(bool demo = false) : this(new HttpClientHandler(), null, null, () => DescribeThisPc(demo)) { }
+    /// <param name="installed">Whether this copy was installed with Setup.</param>
+    public BugReportService(bool demo, bool installed) : this(new HttpClientHandler(), null, null, () => DescribeThisPc(demo, installed)) { }
 
     internal BugReportService(HttpMessageHandler handler, string? relayUrl, string? relayKey, Func<string> environment)
     {
         _relayUrl = relayUrl ?? RelayUrl;
         _relayKey = relayKey ?? RelayKey;
-        _environment = environment;
+        _environment = new Lazy<string>(environment);
         _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
         _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HyperVManage", AppInfo.Version));
     }
@@ -93,7 +96,10 @@ public sealed partial class BugReportService : IBugReportService, IDisposable
             var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(text);
             // Only ever an issue on this repository: it is opened in the browser if asked.
-            if (doc.RootElement.TryGetProperty("issueUrl", out var url)
+            // Whatever answers (a proxy, a sign-in page) may not send what the relay does.
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("issueUrl", out var url)
+                && url.ValueKind == JsonValueKind.String
                 && Uri.TryCreate(url.GetString(), UriKind.Absolute, out var issue)
                 && issue.Scheme == Uri.UriSchemeHttps
                 && issue.AbsoluteUri.StartsWith(AppInfo.RepoUrl + "/issues/", StringComparison.OrdinalIgnoreCase))
@@ -118,7 +124,7 @@ public sealed partial class BugReportService : IBugReportService, IDisposable
             text.AppendLine().AppendLine("### What you expected").AppendLine(report.WhatExpected.Trim());
         if (!string.IsNullOrWhiteSpace(report.Steps))
             text.AppendLine().AppendLine("### Steps to reproduce").AppendLine(report.Steps.Trim());
-        text.AppendLine().AppendLine("### About this PC").Append(_environment());
+        text.AppendLine().AppendLine("### About this PC").Append(_environment.Value);
         return text.ToString();
     }
 
@@ -155,22 +161,15 @@ public sealed partial class BugReportService : IBugReportService, IDisposable
     /// that change how the app behaves. Nothing about the VMs, the network or the person; the
     /// report becomes a public issue.
     /// </summary>
-    internal static string DescribeThisPc(bool demo)
+    internal static string DescribeThisPc(bool demo, bool installed)
     {
         var text = new StringBuilder();
         text.AppendLine($"- Hyper-V Manage {AppInfo.Version}{(demo ? ", demo mode" : "")}");
         text.AppendLine($"- {RuntimeInformation.OSDescription.Trim()} ({Environment.OSVersion.Version})");
         text.AppendLine($"- Processor: {RuntimeInformation.OSArchitecture}, app built for {RuntimeInformation.ProcessArchitecture}");
-        text.AppendLine($"- Installed: {(IsInstalledCopy() ? "with Setup" : "no, run from the exe")}");
+        text.AppendLine($"- Installed: {(installed ? "with Setup" : "no, run from the exe")}");
         text.AppendLine($"- Screen reader running: {ScreenReaders()}");
         return text.ToString();
-    }
-
-    private static bool IsInstalledCopy()
-    {
-        var exe = Environment.ProcessPath;
-        var installs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HyperVManage");
-        return exe is not null && exe.StartsWith(installs + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     private static readonly (string Process, string Name)[] KnownScreenReaders =

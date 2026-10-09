@@ -117,8 +117,9 @@ From the [latest release](https://github.com/kellylford/HyperVManage/releases):
 An installed copy checks for a new version each time it starts. If there is one, it says so,
 downloads it while you work, and installs it when you close Hyper-V Manage, so the next start is
 the new version. Help, Check for Updates checks straight away and offers to install now, which
-closes Hyper-V Manage and opens the new version; it won't while New Virtual Machine is building
-one. The single exe can't update itself: it says when there's a new version, and Check for
+closes Hyper-V Manage and opens the new version; it won't while a VM is being built, cloned,
+checkpointed or deleted, since closing would cut that short. An update closed before it finished
+downloading is found again at the next start. The single exe can't update itself: it says when there's a new version, and Check for
 Updates offers its download page.
 
 ### Reporting a bug

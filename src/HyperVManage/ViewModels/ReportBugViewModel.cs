@@ -21,7 +21,7 @@ public sealed partial class ReportBugViewModel : ObservableObject, IDisposable
     [ObservableProperty, NotifyPropertyChangedFor(nameof(Preview))] private string _whatExpected = "";
     [ObservableProperty, NotifyPropertyChangedFor(nameof(Preview))] private string _steps = "";
 
-    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(SendYourselfCommand))]
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(SendYourselfCommand))]
     private bool _isSending;
 
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CloseText)), NotifyCanExecuteChangedFor(nameof(OpenIssueCommand), nameof(SendCommand))]
@@ -67,11 +67,14 @@ public sealed partial class ReportBugViewModel : ObservableObject, IDisposable
         return false;
     }
 
-    private bool CanSendNow() => !IsSending && IssueUrl is null;
+    private bool CanSendNow() => IssueUrl is null;
 
-    [RelayCommand(CanExecute = nameof(CanSendNow))]
+    // Send stays enabled while sending, so the button keeps keyboard focus rather than dropping
+    // it to nowhere; a second press is ignored instead.
+    [RelayCommand(CanExecute = nameof(CanSendNow), AllowConcurrentExecutions = true)]
     private async Task Send()
     {
+        if (IsSending) return;
         if (!Ready()) return;
         if (!CanSendItself) { SendYourself(); return; }
 
@@ -102,12 +105,17 @@ public sealed partial class ReportBugViewModel : ObservableObject, IDisposable
     {
         if (!Ready()) return;
         var report = Current;
+        // Separately: another app holding the clipboard mustn't stop the form opening.
+        var copied = true;
+        try { CopyText?.Invoke(_service.BuildText(report)); }
+        catch (Exception) { copied = false; }
         try
         {
-            CopyText?.Invoke(_service.BuildText(report));
             OpenPage?.Invoke(_service.BuildIssueFormUrl(report));
-            Say("The report is on the clipboard, and GitHub's new issue form is opening in your browser with it filled in. " +
-                "Sending it there needs a GitHub account.");
+            Say(copied
+                ? "The report is on the clipboard, and GitHub's new issue form is opening in your browser with it filled in. Sending it there needs a GitHub account."
+                : "GitHub's new issue form is opening in your browser with the report filled in. Sending it there needs a GitHub account. " +
+                  "The report couldn't be put on the clipboard; a long one is cut short in the form.");
         }
         catch (Exception ex)
         {

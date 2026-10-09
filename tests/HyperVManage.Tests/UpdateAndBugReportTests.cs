@@ -64,7 +64,15 @@ public class UpdateServiceTests
     }
 
     [Fact]
-    public void ThisBuildsOwnVersion_IsReadable() => Assert.True(UpdateService.TryParseVersion(AppInfo.Version, out _), AppInfo.Version);
+    public void ThisBuildsOwnVersion_IsReadable() => Assert.True(Velopack.SemanticVersion.TryParse(AppInfo.Version, out _), AppInfo.Version);
+
+    [Fact]
+    public void ATestBuildOfANewMinorVersion_StillUpdatesToItsRelease() =>
+        Assert.Equal("1.0.0", UpdateService.NewestRelease(Releases(Release("v1.0.0")), "1.0.0-test.4.1")?.Version);
+
+    [Fact]
+    public void NewestRelease_IgnoresEntriesOfTheWrongShape() =>
+        Assert.Equal("0.9.9", UpdateService.NewestRelease("""[1, "x", {"tag_name": 5}, {"tag_name": "v0.9.9", "html_url": 7}]""", "0.9.3")?.Version);
 
     [Fact]
     public async Task TheSingleExe_SaysWhenGitHubCantBeReached()
@@ -89,7 +97,8 @@ public class UpdateServiceTests
         Assert.Equal(UpdateStatus.Available, check.Status);
         Assert.Equal("99.0.0", check.Version);
         Assert.Equal(AppInfo.ReleasesApiUrl, asked?.AbsoluteUri);
-        Assert.Equal("There's no update to install.", await service.InstallAndRestartAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("There's no update to install.", await service.DownloadAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("The update hasn't finished downloading.", service.InstallAndRestart());
     }
 }
 
@@ -99,37 +108,49 @@ public class UpdateCheckerTests
     {
         public bool InstallsItself => installsItself;
         public int Checks;
+        public int Downloads;
         public int Installs;
+        public string DownloadProblem = "";
         public TaskCompletionSource<UpdateCheck>? Pending;
+        public Action? WhileDownloading;
         public Task<UpdateCheck> CheckAsync(CancellationToken cancellationToken = default)
         {
             Checks++;
             return Pending?.Task ?? Task.FromResult(result);
         }
-        public Task<string> InstallAndRestartAsync(CancellationToken cancellationToken = default)
+        public Task<string> DownloadAsync(CancellationToken cancellationToken = default)
+        {
+            Downloads++;
+            WhileDownloading?.Invoke();
+            return Task.FromResult(DownloadProblem);
+        }
+        public string InstallAndRestart()
         {
             Installs++;
-            return Task.FromResult("the disk is full");
+            return "the disk is full";
         }
         public void Dispose() { }
     }
 
     private static readonly UpdateCheck Available = new(UpdateStatus.Available, "0.9.9", AppInfo.ReleasePage("0.9.9"));
 
-    private static (UpdateChecker Checker, List<string> Said, List<string> Asked, List<Uri> Opened) Make(
-        FakeUpdates updates, bool answer = true, bool building = false)
+    private sealed class Harness
     {
-        var said = new List<string>();
-        var asked = new List<string>();
-        var opened = new List<Uri>();
-        var checker = new UpdateChecker(updates, "0.9.3")
-        {
-            Report = said.Add,
-            Confirm = q => { asked.Add(q); return answer; },
-            BuildRunning = () => building,
-            OpenPage = opened.Add,
-        };
-        return (checker, said, asked, opened);
+        public required UpdateChecker Checker;
+        public List<string> Said = [];
+        public List<string> Asked = [];
+        public List<Uri> Opened = [];
+        public bool Busy;
+    }
+
+    private static Harness Make(FakeUpdates updates, bool answer = true)
+    {
+        var h = new Harness { Checker = new UpdateChecker(updates, "0.9.3") };
+        h.Checker.Report = h.Said.Add;
+        h.Checker.Confirm = q => { h.Asked.Add(q); return answer; };
+        h.Checker.Busy = () => h.Busy;
+        h.Checker.OpenPage = h.Opened.Add;
+        return h;
     }
 
     [Theory]
@@ -137,100 +158,125 @@ public class UpdateCheckerTests
     [InlineData(UpdateStatus.Failed)]
     public async Task AtStart_NothingIsSaid_UnlessThereIsAnUpdate(UpdateStatus status)
     {
-        var (checker, said, asked, _) = Make(new FakeUpdates(new UpdateCheck(status, Problem: "offline"), true));
-        await checker.CheckAtStartAsync();
-        Assert.Empty(said);
-        Assert.Empty(asked);
+        var h = Make(new FakeUpdates(new UpdateCheck(status, Problem: "offline"), true));
+        await h.Checker.CheckAtStartAsync();
+        Assert.Empty(h.Said);
+        Assert.Empty(h.Asked);
     }
 
     [Fact]
     public async Task AtStart_AnUpdateIsAnnounced_ButNothingIsAsked()
     {
-        var (checker, said, asked, _) = Make(new FakeUpdates(Available, installsItself: true));
-        await checker.CheckAtStartAsync();
-        Assert.Equal(["Hyper-V Manage 0.9.9 is available. It's installed when you close Hyper-V Manage, or now from Help, Check for Updates."], said);
-        Assert.Empty(asked);
+        var h = Make(new FakeUpdates(Available, installsItself: true));
+        await h.Checker.CheckAtStartAsync();
+        Assert.Equal(["Hyper-V Manage 0.9.9 is available. It downloads while you work and is installed when you close Hyper-V Manage, or now from Help, Check for Updates."], h.Said);
+        Assert.Empty(h.Asked);
 
-        (checker, said, _, _) = Make(new FakeUpdates(Available, installsItself: false));
-        await checker.CheckAtStartAsync();
-        Assert.Equal(["Hyper-V Manage 0.9.9 is available. Help, Check for Updates opens its download page."], said);
+        h = Make(new FakeUpdates(Available, installsItself: false));
+        await h.Checker.CheckAtStartAsync();
+        Assert.Equal(["Hyper-V Manage 0.9.9 is available. Help, Check for Updates opens its download page."], h.Said);
     }
 
     [Fact]
     public async Task FromHelp_UpToDate_SaysWhichVersionThisIs()
     {
-        var (checker, said, asked, _) = Make(new FakeUpdates(new UpdateCheck(UpdateStatus.UpToDate), true));
-        await checker.CheckNowAsync();
-        Assert.Equal(["Checking for updates.", "Hyper-V Manage 0.9.3 is the newest version."], said);
-        Assert.Empty(asked);
+        var h = Make(new FakeUpdates(new UpdateCheck(UpdateStatus.UpToDate), true));
+        await h.Checker.CheckNowAsync();
+        Assert.Equal(["Checking for updates.", "Hyper-V Manage 0.9.3 is the newest version."], h.Said);
+        Assert.Empty(h.Asked);
     }
 
     [Fact]
     public async Task FromHelp_AFailureSaysWhy()
     {
-        var (checker, said, _, _) = Make(new FakeUpdates(new UpdateCheck(UpdateStatus.Failed, Problem: "GitHub didn't answer in time."), true));
-        await checker.CheckNowAsync();
-        Assert.Equal("Couldn't check for updates. GitHub didn't answer in time.", said[^1]);
+        var h = Make(new FakeUpdates(new UpdateCheck(UpdateStatus.Failed, Problem: "There was no answer in 30 seconds."), true));
+        await h.Checker.CheckNowAsync();
+        Assert.Equal("Couldn't check for updates. There was no answer in 30 seconds.", h.Said[^1]);
     }
 
     [Fact]
     public async Task FromHelp_TheSingleExe_OffersTheDownloadPage()
     {
         var updates = new FakeUpdates(Available, installsItself: false);
-        var (checker, said, asked, opened) = Make(updates);
-        await checker.CheckNowAsync();
-        Assert.Contains("Open its download page?", Assert.Single(asked));
-        Assert.Equal([AppInfo.ReleasePage("0.9.9")], opened);
+        var h = Make(updates);
+        await h.Checker.CheckNowAsync();
+        Assert.Contains("Open its download page?", Assert.Single(h.Asked));
+        Assert.Equal([AppInfo.ReleasePage("0.9.9")], h.Opened);
         Assert.Equal(0, updates.Installs);
 
-        (checker, _, _, opened) = Make(updates, answer: false);
-        await checker.CheckNowAsync();
-        Assert.Empty(opened);
+        h = Make(updates, answer: false);
+        await h.Checker.CheckNowAsync();
+        Assert.Empty(h.Opened);
     }
 
     [Fact]
-    public async Task FromHelp_AnInstalledCopy_InstallsWhenTold_AndSaysWhyItCouldnt()
+    public async Task FromHelp_AnInstalledCopy_DownloadsThenInstalls_AndSaysWhyItCouldnt()
     {
         var updates = new FakeUpdates(Available, installsItself: true);
-        var (checker, said, asked, _) = Make(updates);
-        await checker.CheckNowAsync();
-        Assert.Contains("Install it now?", Assert.Single(asked));
-        Assert.Equal(1, updates.Installs);
-        Assert.Equal(["Checking for updates.", "Installing Hyper-V Manage 0.9.9.", "Couldn't install the update. the disk is full"], said);
+        var h = Make(updates);
+        await h.Checker.CheckNowAsync();
+        Assert.Contains("Install it now?", Assert.Single(h.Asked));
+        Assert.Equal((1, 1), (updates.Downloads, updates.Installs));
+        Assert.Equal(["Checking for updates.", "Downloading Hyper-V Manage 0.9.9.", "Installing Hyper-V Manage 0.9.9.",
+            "Couldn't install the update. the disk is full"], h.Said);
+    }
+
+    [Fact]
+    public async Task FromHelp_AFailedDownload_IsSaid_AndNothingIsInstalled()
+    {
+        var updates = new FakeUpdates(Available, installsItself: true) { DownloadProblem = "No such host is known." };
+        var h = Make(updates);
+        await h.Checker.CheckNowAsync();
+        Assert.Equal(0, updates.Installs);
+        Assert.Equal("Couldn't download the update. No such host is known.", h.Said[^1]);
     }
 
     [Fact]
     public async Task FromHelp_NotNow_SaysWhenItWillBeInstalled()
     {
         var updates = new FakeUpdates(Available, installsItself: true);
-        var (checker, said, _, _) = Make(updates, answer: false);
-        await checker.CheckNowAsync();
-        Assert.Equal(0, updates.Installs);
-        Assert.Equal("Hyper-V Manage 0.9.9 is installed when you close Hyper-V Manage.", said[^1]);
+        var h = Make(updates, answer: false);
+        await h.Checker.CheckNowAsync();
+        Assert.Equal((0, 0), (updates.Downloads, updates.Installs));
+        Assert.Equal("Hyper-V Manage 0.9.9 is installed when you close Hyper-V Manage, once it has downloaded.", h.Said[^1]);
     }
 
     [Fact]
-    public async Task FromHelp_NeverRestartsDuringABuild()
+    public async Task FromHelp_WhileBusy_DoesntOfferToInstall()
     {
         var updates = new FakeUpdates(Available, installsItself: true);
-        var (checker, said, _, _) = Make(updates, building: true);
-        await checker.CheckNowAsync();
+        var h = Make(updates);
+        h.Busy = true;
+        await h.Checker.CheckNowAsync();
+        Assert.Empty(h.Asked);
         Assert.Equal(0, updates.Installs);
-        Assert.StartsWith("A virtual machine is being built", said[^1]);
+        Assert.StartsWith("Hyper-V Manage 0.9.9 is available, but can't be installed while a virtual machine is being built or changed.", h.Said[^1]);
     }
 
     [Fact]
-    public async Task OneCheckAtATime()
+    public async Task FromHelp_SomethingStartedDuringTheDownload_StopsTheInstall()
+    {
+        var updates = new FakeUpdates(Available, installsItself: true);
+        var h = Make(updates);
+        updates.WhileDownloading = () => h.Busy = true;
+        await h.Checker.CheckNowAsync();
+        Assert.Equal((1, 0), (updates.Downloads, updates.Installs));
+        Assert.StartsWith("Hyper-V Manage 0.9.9 has downloaded, and is installed when you close Hyper-V Manage", h.Said[^1]);
+    }
+
+    [Fact]
+    public async Task FromHelp_DuringTheStartCheck_SharesItsAnswer()
     {
         var updates = new FakeUpdates(Available, installsItself: true) { Pending = new() };
-        var (checker, said, _, _) = Make(updates);
-        var first = checker.CheckNowAsync();
-        await checker.CheckNowAsync();
-        await checker.CheckAtStartAsync();
-        Assert.Equal(1, updates.Checks);
-        Assert.Equal("Already checking for updates.", said[^1]);
+        var h = Make(updates, answer: false);
+        var atStart = h.Checker.CheckAtStartAsync();
+        var fromHelp = h.Checker.CheckNowAsync();
+        await h.Checker.CheckNowAsync();
+        Assert.Equal("Already checking for updates.", h.Said[^1]);
         updates.Pending.SetResult(new UpdateCheck(UpdateStatus.UpToDate));
-        await first;
+        await Task.WhenAll(atStart, fromHelp);
+        Assert.Equal(1, updates.Checks);
+        Assert.Equal("Hyper-V Manage 0.9.3 is the newest version.", h.Said[^1]);
     }
 }
 
@@ -282,6 +328,29 @@ public class BugReportServiceTests
         var result = await service.SendAsync(Report, TestContext.Current.CancellationToken);
         Assert.False(result.Sent);
         Assert.Equal("The report service didn't say which issue it made.", result.Problem);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("\"ok\"")]
+    [InlineData("{\"issueUrl\": 12}")]
+    [InlineData("{\"issueUrl\": null}")]
+    public async Task Send_AnAnswerOfAnotherShape_IsAFailureNotACrash(string json)
+    {
+        using var service = Make(_ => Json(HttpStatusCode.OK, json));
+        var result = await service.SendAsync(Report, TestContext.Current.CancellationToken);
+        Assert.False(result.Sent);
+        Assert.Equal("The report service didn't say which issue it made.", result.Problem);
+    }
+
+    [Fact]
+    public void AboutThisPc_IsWorkedOutOnce()
+    {
+        var calls = 0;
+        using var service = new BugReportService(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)), "", "", () => { calls++; return "- x\n"; });
+        service.BuildText(Report);
+        service.BuildText(Report);
+        Assert.Equal(1, calls);
     }
 
     [Theory]
@@ -382,7 +451,8 @@ public class BugReportServiceTests
     [Fact]
     public void AboutThisPc_SaysNothingAboutThePersonOrTheirMachines()
     {
-        var text = BugReportService.DescribeThisPc(demo: true);
+        var text = BugReportService.DescribeThisPc(demo: true, installed: true);
+        Assert.Contains("- Installed: with Setup", text);
         Assert.Contains($"Hyper-V Manage {AppInfo.Version}, demo mode", text);
         Assert.Contains("Screen reader running:", text);
         Assert.DoesNotContain(Environment.MachineName, text, StringComparison.OrdinalIgnoreCase);
@@ -471,6 +541,42 @@ public class ReportBugViewModelTests
         Assert.Equal(["It closed.|about"], copied);
         Assert.Equal("https://github.com/kellylford/HyperVManage/issues/new?title=Crash", Assert.Single(opened).AbsoluteUri);
         Assert.Contains("needs a GitHub account", vm.StatusText);
+    }
+
+    [Fact]
+    public void AClipboardInUse_StillOpensTheForm()
+    {
+        var opened = new List<Uri>();
+        using var vm = new ReportBugViewModel(new FakeReports(false, Issue))
+        {
+            Summary = "Crash", WhatHappened = "x", CopyText = _ => throw new System.Runtime.InteropServices.COMException("OpenClipboard failed"), OpenPage = opened.Add,
+        };
+        vm.SendYourselfCommand.Execute(null);
+        Assert.Single(opened);
+        Assert.Contains("couldn't be put on the clipboard", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Send_StaysAvailableWhileSending_ButSendsOnce()
+    {
+        var gate = new TaskCompletionSource<BugReportResult>();
+        var reports = new SlowReports(gate.Task);
+        using var vm = new ReportBugViewModel(reports) { Summary = "Crash", WhatHappened = "x" };
+        var first = vm.SendCommand.ExecuteAsync(null);
+        Assert.True(vm.SendCommand.CanExecute(null));
+        await vm.SendCommand.ExecuteAsync(null);
+        gate.SetResult(Issue);
+        await first;
+        Assert.Equal(1, reports.Sends);
+    }
+
+    private sealed class SlowReports(Task<BugReportResult> answer) : IBugReportService
+    {
+        public int Sends;
+        public bool CanSend => true;
+        public Task<BugReportResult> SendAsync(BugReport report, CancellationToken cancellationToken = default) { Sends++; return answer; }
+        public string BuildText(BugReport report) => "";
+        public Uri BuildIssueFormUrl(BugReport report) => new("https://github.com/kellylford/HyperVManage/issues/new");
     }
 
     [Fact]

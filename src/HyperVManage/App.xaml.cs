@@ -24,11 +24,13 @@ public partial class App : Application
     }
 
     private IUpdateService? _updates;
+    private BugReportService? _bugReports;
 
     protected override void OnExit(ExitEventArgs e)
     {
         // Arms installing an update downloaded while the app ran.
         _updates?.Dispose();
+        _bugReports?.Dispose();
         base.OnExit(e);
     }
 
@@ -73,7 +75,7 @@ public partial class App : Application
         // --update-feed <folder or address>: Velopack packages to update from instead of GitHub,
         // for trying an update without publishing one.
         _updates = new UpdateService(ArgumentAfter(e.Args, "--update-feed"));
-        var window = new MainWindow(vm, demo, new UpdateChecker(_updates), new BugReportService(demo));
+        var window = new MainWindow(vm, demo, new UpdateChecker(_updates), _bugReports = new BugReportService(demo, _updates.InstallsItself));
         MainWindow = window;
         window.Show();
     }
@@ -84,8 +86,7 @@ public partial class App : Application
         return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
     }
 
-    private static bool IsAdministrator() =>
-        new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
+    private static bool IsAdministrator() => AppInfo.IsElevated;
 
     private static bool RelaunchElevated(string[] args)
     {

@@ -43,7 +43,9 @@ env:
 jobs:
   release:
     runs-on: windows-latest
-    environment: azure-signing
+    # Only a build that signs runs in the environment Azure trusts, so code on a pull request's
+    # branch can never get a signing credential.
+    environment: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.sign)) && 'azure-signing' || '' }}
     env:
       PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
       SIGN: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.sign) }}
@@ -85,8 +87,12 @@ jobs:
           RELAY_URL: ${{ vars.BUG_REPORT_RELAY_URL }}
           RELAY_KEY: ${{ secrets.BUG_REPORT_RELAY_KEY }}
         run: |
-          if (-not $env:RELAY_URL.StartsWith('https://') -or -not $env:RELAY_KEY) { throw 'BUG_REPORT_RELAY_URL must be https and BUG_REPORT_RELAY_KEY set.' }
-          if ($env:RELAY_URL -match '"' -or $env:RELAY_KEY -match '"') { throw 'The relay address and key cannot contain quotes.' }
+          # Both go into a C# string, so only characters that can't end or change one.
+          $uri = $null
+          if (-not [Uri]::TryCreate($env:RELAY_URL, 'Absolute', [ref]$uri) -or $uri.Scheme -ne 'https' -or $env:RELAY_URL -notmatch '^[A-Za-z0-9:/._~-]+$') {
+            throw 'BUG_REPORT_RELAY_URL must be a plain https address.'
+          }
+          if ($env:RELAY_KEY -notmatch '^[A-Za-z0-9_-]{20,}$') { throw 'BUG_REPORT_RELAY_KEY must be at least 20 letters, digits, - or _ (see relay/README.md).' }
           @"
           namespace HyperVManage.Services;
           public sealed partial class BugReportService
@@ -229,8 +235,9 @@ jobs:
         run: |
           Expand-Archive (Get-ChildItem dist\New-HyperVRdpVM-*.zip).FullName -DestinationPath zipcheck
           $files = @(Get-ChildItem dist\*.exe) + @(Get-Item zipcheck\hyperv-rdp-vm\New-HyperVRdpVM.ps1)
-          # Inside the packages too: the app, and Velopack's Update.exe that installs updates.
-          foreach ($pkg in Get-ChildItem Releases\*-full.nupkg | Where-Object Name -like "*$env:Version*") {
+          # Inside this release's full packages too: the app, and Velopack's Update.exe. Delta
+          # packages hold binary differences, not files to check; they rebuild these same files.
+          foreach ($pkg in Get-ChildItem Releases\*-full.nupkg | Where-Object Name -like "*-$env:Version-*") {
             $out = "pkgcheck\$($pkg.BaseName)"
             Expand-Archive $pkg.FullName -DestinationPath $out -Force
             $files += Get-ChildItem $out -Recurse -Include *.exe, HyperVManage.dll
@@ -300,6 +307,9 @@ jobs:
           $feed = @('RELEASES', 'releases.win.json', 'assets.win.json', 'RELEASES-win-arm64', 'releases.win-arm64.json', 'assets.win-arm64.json') |
             ForEach-Object { "Releases\$_" }
           foreach ($f in $feed) { if (-not (Test-Path $f)) { throw "$f is missing." } }
-          $packages = @(Get-ChildItem Releases\*.nupkg | ForEach-Object FullName)
+          # This release's packages only: the previous release's full package, fetched above to make
+          # the deltas, is already on that release.
+          $packages = @(Get-ChildItem Releases\*.nupkg | Where-Object Name -like "*-$version-*" | ForEach-Object FullName)
+          if ($packages.Count -lt 2) { throw "Expected this release's packages for both processors, found: $($packages -join ', ')" }
           gh release create $env:GITHUB_REF_NAME (Get-ChildItem dist | ForEach-Object FullName) $feed $packages `
             --title "Hyper-V Manage $version" --notes-file notes.md @pre

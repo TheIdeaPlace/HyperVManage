@@ -25,7 +25,9 @@ public partial class ReportBugWindow : Window
         // Without the relay there is only the one way to send.
         if (!vm.CanSendItself) SendButton.Visibility = Visibility.Collapsed;
 
-        vm.Announce += text => Announcer.Announce(this, text);
+        // After any focus move the same action makes (to the empty box, Open Issue or Send with
+        // GitHub): screen readers drop what's pending when focus moves, so the news goes second.
+        vm.Announce += text => Dispatcher.BeginInvoke(() => Announcer.Announce(this, text), System.Windows.Threading.DispatcherPriority.ContextIdle);
         vm.MissingField += field => (field == nameof(ReportBugViewModel.Summary) ? SummaryBox : WhatHappenedBox).Focus();
         vm.Sent += () =>
         {

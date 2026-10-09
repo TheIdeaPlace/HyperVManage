@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Principal;
 
 namespace HyperVManage.Services;
 
@@ -18,7 +17,7 @@ public static class Browser
     public static void Open(Uri page)
     {
         if (page.Scheme != Uri.UriSchemeHttps) throw new ArgumentException("Only https pages are opened.", nameof(page));
-        if (!IsElevated())
+        if (!AppInfo.IsElevated)
         {
             Process.Start(new ProcessStartInfo(page.AbsoluteUri) { UseShellExecute = true })?.Dispose();
             return;
@@ -39,19 +38,13 @@ public static class Browser
         }
     }
 
-    private static bool IsElevated()
-    {
-        using var identity = WindowsIdentity.GetCurrent();
-        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
-    }
-
     // Raymond Chen, "How can I launch an unelevated process from my elevated process, redux":
     // find the desktop's folder view through the shell windows, and call ShellExecute on its
     // Application object, which runs inside Explorer.
     private static void DesktopShellExecute(string address)
     {
         var shellWindows = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("9BA05972-F6A8-11CF-A442-00A0C90A8F39"), throwOnError: true)!)!;
-        object? desktop = null, view = null, folderView = null, application = null;
+        object? desktop = null, browser = null, view = null, folderView = null, application = null;
         try
         {
             const int CSIDL_DESKTOP = 0, SWC_DESKTOP = 8, SWFO_NEEDDISPATCH = 1;
@@ -65,7 +58,7 @@ public static class Browser
 
             var topLevelBrowser = new Guid("4C96BE40-915C-11CF-99D3-00AA004AE837");
             var shellBrowserId = typeof(IShellBrowser).GUID;
-            Marshal.ThrowExceptionForHR(((IServiceProvider)desktop).QueryService(ref topLevelBrowser, ref shellBrowserId, out var browser));
+            Marshal.ThrowExceptionForHR(((IServiceProvider)desktop).QueryService(ref topLevelBrowser, ref shellBrowserId, out browser));
             Marshal.ThrowExceptionForHR(((IShellBrowser)browser).QueryActiveShellView(out var shellView));
             view = shellView;
             var dispatch = new Guid("00020400-0000-0000-C000-000000000046");
@@ -79,7 +72,7 @@ public static class Browser
         }
         finally
         {
-            foreach (var o in new[] { application, folderView, view, desktop, shellWindows })
+            foreach (var o in new[] { application, folderView, view, browser, desktop, shellWindows })
                 if (o is not null && Marshal.IsComObject(o)) Marshal.ReleaseComObject(o);
         }
     }

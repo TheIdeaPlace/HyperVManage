@@ -21,13 +21,16 @@ public interface IUpdateService : IDisposable
 
     /// <summary>Checks for a newer version. Never throws: a failure comes back as
     /// <see cref="UpdateStatus.Failed"/> with the reason. For an installed copy, an update that is
-    /// found starts downloading at once and is installed when the app closes.</summary>
+    /// found starts downloading at once, and once downloaded is installed when the app closes.</summary>
     Task<UpdateCheck> CheckAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>Finishes downloading the update the last check found, installs it and starts the
-    /// new version; on success the process ends and this never returns. Returns the reason when
-    /// it can't.</summary>
-    Task<string> InstallAndRestartAsync(CancellationToken cancellationToken = default);
+    /// <summary>Waits for the update the last check found to finish downloading, downloading it
+    /// again if the background download failed. Returns "" when it's ready, or the reason it isn't.</summary>
+    Task<string> DownloadAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Installs the downloaded update and starts the new version: on success the process
+    /// ends at once and this never returns. Returns the reason when it can't.</summary>
+    string InstallAndRestart();
 }
 
 /// <summary>
@@ -43,9 +46,10 @@ public sealed class UpdateService : IUpdateService
     private readonly string? _feed;
     private readonly Lazy<UpdateManager?> _manager;
 
-    private Velopack.UpdateInfo? _pending;
-    private Task? _download;
-    private volatile bool _downloaded;
+    /// <summary>The update found, and its download. Replaced as one object, so a finished download
+    /// always belongs to the update beside it, and a check on another thread never sees half.</summary>
+    private sealed record Pending(Velopack.UpdateInfo Update, Task Download);
+    private volatile Pending? _pending;
     private bool _restarting;
     private bool _disposed;
 
@@ -93,7 +97,7 @@ public sealed class UpdateService : IUpdateService
         }
         catch (OperationCanceledException)
         {
-            return new UpdateCheck(UpdateStatus.Failed, Problem: "GitHub didn't answer in time.");
+            return new UpdateCheck(UpdateStatus.Failed, Problem: "There was no answer in 30 seconds.");
         }
         catch (Exception ex)
         {
@@ -108,19 +112,16 @@ public sealed class UpdateService : IUpdateService
         if (update is null) return new UpdateCheck(UpdateStatus.UpToDate);
 
         var version = update.TargetFullRelease.Version.ToString();
-        if (_pending?.TargetFullRelease.Version.ToString() != version)
-        {
-            _pending = update;
-            _downloaded = false;
-            // On the app's lifetime, not the check's short timeout: the package is large.
-            _download = Task.Run(async () =>
-            {
-                await manager.DownloadUpdatesAsync(update, cancelToken: _lifetime.Token).ConfigureAwait(false);
-                _downloaded = true;
-            });
-        }
+        // A new version, or a download that failed (the network, or another Velopack process
+        // holding its lock), starts again; one still going, or done, is kept.
+        if (_pending is not { } p || p.Update.TargetFullRelease.Version.ToString() != version || p.Download.IsFaulted || p.Download.IsCanceled)
+            _pending = new Pending(update, StartDownload(manager, update));
         return new UpdateCheck(UpdateStatus.Available, version, AppInfo.ReleasePage(version));
     }
+
+    // On the app's lifetime, not the check's short timeout: the package is large.
+    private Task StartDownload(UpdateManager manager, Velopack.UpdateInfo update) =>
+        Task.Run(() => manager.DownloadUpdatesAsync(update, cancelToken: _lifetime.Token));
 
     private async Task<UpdateCheck> CheckGitHubAsync(CancellationToken ct)
     {
@@ -139,18 +140,21 @@ public sealed class UpdateService : IUpdateService
     /// </summary>
     internal static (string Version, Uri Page)? NewestRelease(string releasesJson, string current)
     {
-        if (!TryParseVersion(current, out var mine)) return null;
+        if (!SemanticVersion.TryParse(current, out var mine)) return null;
         using var doc = JsonDocument.Parse(releasesJson);
         if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
 
-        (Version Parsed, string Text, Uri Page)? best = null;
+        (SemanticVersion Parsed, string Text, Uri Page)? best = null;
         foreach (var release in doc.RootElement.EnumerateArray())
         {
+            if (release.ValueKind != JsonValueKind.Object) continue;
             if (release.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True) continue;
-            if (!release.TryGetProperty("tag_name", out var tagElement) || tagElement.GetString() is not { } tag) continue;
-            if (!tag.StartsWith('v') || !TryParseVersion(tag[1..], out var theirs)) continue;
+            if (!release.TryGetProperty("tag_name", out var tagElement) || tagElement.ValueKind != JsonValueKind.String) continue;
+            var tag = tagElement.GetString()!;
+            if (!tag.StartsWith('v') || !IsReleaseVersion(tag[1..]) || !SemanticVersion.TryParse(tag[1..], out var theirs)) continue;
             if (theirs <= mine || (best is { } b && theirs <= b.Parsed)) continue;
-            var page = release.TryGetProperty("html_url", out var url) && Uri.TryCreate(url.GetString(), UriKind.Absolute, out var u)
+            var page = release.TryGetProperty("html_url", out var url) && url.ValueKind == JsonValueKind.String
+                       && Uri.TryCreate(url.GetString(), UriKind.Absolute, out var u)
                        && u.Scheme == Uri.UriSchemeHttps && u.Host == "github.com"
                 ? u
                 : AppInfo.ReleasePage(tag[1..]);
@@ -159,50 +163,47 @@ public sealed class UpdateService : IUpdateService
         return best is { } found ? (found.Text, found.Page) : null;
     }
 
-    /// <summary>Major.minor.patch only. A build's own version may carry "-test.N", which is
-    /// older than the release of the same number, so it compares as one patch lower.</summary>
-    internal static bool TryParseVersion(string text, out Version version)
-    {
-        var dash = text.IndexOf('-');
-        var core = dash < 0 ? text : text[..dash];
-        if (!System.Version.TryParse(core, out var parsed) || parsed.Build < 0 || parsed.Revision >= 0)
-        {
-            version = new Version();
-            return false;
-        }
-        version = dash < 0 || parsed.Build == 0 ? parsed : new Version(parsed.Major, parsed.Minor, parsed.Build - 1, int.MaxValue);
-        return true;
-    }
+    /// <summary>Major.minor.patch, as the release workflow insists on, and perhaps -test.N.</summary>
+    private static bool IsReleaseVersion(string text) =>
+        System.Text.RegularExpressions.Regex.IsMatch(text, @"^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$");
 
-    public async Task<string> InstallAndRestartAsync(CancellationToken cancellationToken = default)
+    public async Task<string> DownloadAsync(CancellationToken cancellationToken = default)
     {
         var manager = _manager.Value;
-        var update = _pending;
-        if (manager is null || update is null) return "There's no update to install.";
+        if (manager is null || _pending is not { } pending) return "There's no update to install.";
         try
         {
-            if (_download is { } download)
+            try { await pending.Download.WaitAsync(cancellationToken).ConfigureAwait(false); }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
-                try { await download.WaitAsync(cancellationToken).ConfigureAwait(false); }
-                catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+                // The background download failed; try once more now that someone is waiting.
+                var again = StartDownload(manager, pending.Update);
+                if (_pending == pending) _pending = pending with { Download = again };
+                await again.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            if (!_downloaded)
-            {
-                // The background download failed, most likely the network; try once more now
-                // that someone is waiting for it.
-                await manager.DownloadUpdatesAsync(update, cancelToken: cancellationToken).ConfigureAwait(false);
-                _downloaded = true;
-            }
-            cancellationToken.ThrowIfCancellationRequested();
-            // Never reset: if this throws, Update.exe may already be on its way, and arming a
-            // second one on exit is the worse outcome.
-            _restarting = true;
-            manager.ApplyUpdatesAndRestart(update, Environment.GetCommandLineArgs()[1..]);
             return "";
         }
         catch (OperationCanceledException)
         {
-            return "Installing the update was stopped.";
+            return "Downloading the update was stopped.";
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    public string InstallAndRestart()
+    {
+        if (_manager.Value is not { } manager || _pending is not { } pending || !pending.Download.IsCompletedSuccessfully)
+            return "The update hasn't finished downloading.";
+        try
+        {
+            // Never reset: if this throws, Update.exe may already be on its way, and arming a
+            // second one on exit is the worse outcome.
+            _restarting = true;
+            manager.ApplyUpdatesAndRestart(pending.Update, Environment.GetCommandLineArgs()[1..]);
+            return "";
         }
         catch (Exception ex)
         {
@@ -214,10 +215,12 @@ public sealed class UpdateService : IUpdateService
     {
         if (_disposed) return;
         _disposed = true;
-        // Closing the app installs a downloaded update, so the next start is the new version.
-        if (_downloaded && !_restarting && _manager.IsValueCreated && _manager.Value is { } manager && _pending is { } update)
+        // Closing the app installs a downloaded update, so the next start is the new version. One
+        // still downloading is left; the next start finds it again.
+        if (!_restarting && _manager.IsValueCreated && _manager.Value is { } manager
+            && _pending is { } pending && pending.Download.IsCompletedSuccessfully)
         {
-            try { manager.WaitExitThenApplyUpdates(update, silent: true, restart: false); }
+            try { manager.WaitExitThenApplyUpdates(pending.Update, silent: true, restart: false); }
             catch (Exception) { }
         }
         _lifetime.Cancel();

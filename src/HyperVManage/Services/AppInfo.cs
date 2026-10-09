@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Security.Principal;
 
 namespace HyperVManage.Services;
 
@@ -16,4 +17,14 @@ public static class AppInfo
     public static string Version { get; } =
         (typeof(AppInfo).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "")
         .Split('+')[0];
+
+    /// <summary>True when running as administrator, as the app does except in demo mode.</summary>
+    public static bool IsElevated
+    {
+        get
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+    }
 }

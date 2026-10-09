@@ -36,7 +36,7 @@ public partial class MainWindow : Window
             updates.Report = text => { _vm.StatusText = text; Announcer.Announce(this, text); };
             updates.Confirm = question => MessageBox.Show(this, question, "Check for Updates",
                 MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes) == MessageBoxResult.Yes;
-            updates.BuildRunning = () => _newVmWindow is { IsBuilding: true };
+            updates.Busy = () => _newVmWindow is { IsBuilding: true } || _vm.Vms.Any(v => v.IsBusy);
             updates.OpenPage = Browser.Open;
         }
 
@@ -275,7 +275,7 @@ public partial class MainWindow : Window
 
     private void ReportBug_Click(object sender, RoutedEventArgs e)
     {
-        var service = _bugReports ?? new BugReportService(_demo);
+        var service = _bugReports ?? new BugReportService(_demo, installed: false);
         try { ReportBugWindow.Show(this, new ReportBugViewModel(service)); }
         finally { if (_bugReports is null) ((IDisposable)service).Dispose(); }
     }
