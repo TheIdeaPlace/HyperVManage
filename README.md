@@ -1,9 +1,6 @@
 # Hyper-V Manage
 
-> **Status: pre-release.** On 2 October 2026 it built Windows VMs
-> end to end on an Arm64 PC and an x64 PC, connected to them with Remote Desktop, opened the
-> console, and paused one. Settings, Checkpoint, Apply Checkpoint, Clone and Delete have so far been exercised only
-> against the pretend VMs of demo mode. See [Testing it on a real machine](#testing-it-on-a-real-machine).
+> **Status: pre-release**, in use on real Hyper-V on Arm64 and x64 PCs.
 
 A Windows app for managing Hyper-V virtual machines, built screen reader first. It is the
 Windows counterpart of [Parallels Manager](https://github.com/kellylford/TheWorkBench/tree/main/parallels-manager), and it builds new Windows
@@ -369,10 +366,8 @@ tests/HyperVManage.Tests/
 
 ## Testing it on a real machine
 
-Done so far, on 2 October 2026: building a VM with New Virtual Machine on an Arm64 PC and on an
-x64 PC, each on "Your network"; Connect with Remote Desktop; Open Console; Pause.
-
-Still to do, on a PC with Hyper-V:
+What to check on a PC with Hyper-V after a change to how the app works with it; demo mode and
+the tests can't show these:
 
 1. Confirm the list matches `Get-VM`.
 2. Start, Shut Down, Save and Resume a test VM, and Turn Off one that is running.
