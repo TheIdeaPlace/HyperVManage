@@ -31,9 +31,17 @@ public sealed class ScreenshotTaker(IHyperVService hyperV, IGuestCredentialStore
     {
         string note;
         var credential = Stored(vm);
+        var wouldAsk = credential is null && (askEvenIfDeclined || !_declined.Contains(vm.Id));
+        // The session picture is taken by Windows inside the VM, so a VM running anything else
+        // goes straight to its own screen, without asking for a sign-in that can't be used.
+        if (wouldAsk && await GuestOsAsync(vm, ct) is { } os && !os.Contains("Windows", StringComparison.OrdinalIgnoreCase))
+        {
+            var own = await hyperV.TakeScreenshotAsync(vm.Id, ct);
+            return own with { Note = $"{os} runs in this VM. Only Windows can show the session you work in over Remote Desktop, so this is the VM's own screen." };
+        }
         var remember = false;
         var replacing = false;
-        if (credential is null && (askEvenIfDeclined || !_declined.Contains(vm.Id)))
+        if (wouldAsk)
             (credential, remember) = Ask(vm, null, null);
         if (credential is null)
             note = "Not signed in, so a Remote Desktop session can't be shown. Take Again asks for the sign-in.";
@@ -81,6 +89,21 @@ public sealed class ScreenshotTaker(IHyperVService hyperV, IGuestCredentialStore
         }
         var screen = await hyperV.TakeScreenshotAsync(vm.Id, ct);
         return screen with { Note = note };
+    }
+
+    /// <summary>What each VM said it runs, so it's asked once, not every Take Again.</summary>
+    private readonly Dictionary<string, string> _guestOs = [];
+
+    private async Task<string?> GuestOsAsync(VmInfo vm, CancellationToken ct)
+    {
+        if (_guestOs.TryGetValue(vm.Id, out var known)) return known;
+        try
+        {
+            // Not kept when it says nothing: it may be still starting.
+            if (await hyperV.GetGuestOsAsync(vm.Id, ct) is { } os) _guestOs[vm.Id] = os;
+            return _guestOs.GetValueOrDefault(vm.Id);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return null; } // then it's treated as Windows, as before
     }
 
     private GuestCredential? Stored(VmInfo vm)

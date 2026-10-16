@@ -355,6 +355,30 @@ public sealed class PowerShellHyperVService : IHyperVService
     public async Task<ScreenPicture> TakeScreenshotAsync(string vmId, CancellationToken ct = default) =>
         ScreenPicture.Parse(await PowerShellRunner.RunAsync(GetVm(vmId) + ScreenshotScript, ct), DateTime.Now);
 
+    public async Task<string?> GetGuestOsAsync(string vmId, CancellationToken ct = default)
+    {
+        var name = (await PowerShellRunner.RunAsync(GetVm(vmId) + GuestOsScript, ct).ConfigureAwait(false)).Trim();
+        return name.Length > 0 ? name : null;
+    }
+
+    /// <summary>
+    /// The guest's OSName, which Hyper-V's guest services report through the key-value exchange:
+    /// "Windows 11 Pro", "Ubuntu" and so on. Ubuntu's installer runs no guest services, so while a
+    /// VM New-HyperVRdpVM.ps1 made is still installing, the note the script gave it says Ubuntu
+    /// instead. Nothing when neither says.
+    /// </summary>
+    internal const string GuestOsScript = """
+        $system = Get-CimInstance -Namespace 'root\virtualization\v2' -ClassName Msvm_ComputerSystem -Filter "Name='$($vm.Id)'"
+        $kvp = if ($system) { Get-CimAssociatedInstance -InputObject $system -ResultClassName Msvm_KvpExchangeComponent -ErrorAction SilentlyContinue }
+        $os = $null
+        foreach ($item in @($kvp | ForEach-Object { $_.GuestIntrinsicExchangeItems })) {
+            $properties = ([xml]$item).INSTANCE.PROPERTY
+            if (($properties | Where-Object Name -eq 'Name').VALUE -eq 'OSName') { $os = ($properties | Where-Object Name -eq 'Data').VALUE }
+        }
+        if (-not $os -and $vm.Notes -match '^Ubuntu .*made by Hyper-V Manage') { $os = 'Ubuntu' }
+        $os
+        """;
+
     /// <summary>How long a picture from inside the VM may take, all told. A VM still starting can
     /// keep PowerShell Direct waiting; this keeps Screenshot from waiting with it.</summary>
     internal static TimeSpan SessionTimeout { get; set; } = TimeSpan.FromSeconds(90);

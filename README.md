@@ -7,8 +7,8 @@
 
 A Windows app for managing Hyper-V virtual machines, built screen reader first. It is the
 Windows counterpart of [Parallels Manager](https://github.com/kellylford/TheWorkBench/tree/main/parallels-manager), and it builds new Windows
-VMs with [New-HyperVRdpVM.ps1](hyperv-rdp-vm/), so a VM made from the app is exactly the
-VM the script makes: ready to sign in to with Remote Desktop, with sound.
+and Ubuntu VMs with [New-HyperVRdpVM.ps1](hyperv-rdp-vm/), so a VM made from the app is exactly
+the VM the script makes: ready to connect to with Remote Desktop, with sound.
 
 It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
 
@@ -73,7 +73,7 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
   - Delete asks first, naming the disk files it will remove. It keeps any disk another VM uses
     or depends on, and only removes a desktop connection file that connects to this VM. It says
     afterwards what it kept and anything it couldn't delete.
-- **ISOs used before**: New Virtual Machine's Windows ISO is a list of the ISOs you've built VMs
+- **ISOs used before**: New Windows Virtual Machine's Windows ISO is a list of the ISOs you've built VMs
   from, the most recent first and already chosen, then the newest Windows ISO in your Downloads
   folder, then Browse for an ISO. Arrow through it, or open it with Alt+Down Arrow; in the open
   list each ISO is read file name first, then its folder. Browse for an ISO opens the file dialog
@@ -81,12 +81,13 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
   while on it puts back the ISO you had. You can still type or paste a path. An ISO is remembered
   when a build starts with it, up to ten, in `%AppData%\HyperVManage\recent-isos.json`; one that
   has been moved or deleted isn't offered. Demo mode remembers them only until it closes.
-- **Windows ISO downloads**: New Virtual Machine has links, under the ISO field, to Microsoft's
+- **Windows ISO downloads**: New Windows Virtual Machine has links, under the ISO field, to Microsoft's
   Windows 11 download pages, with the page for this PC's kind of processor first (Hyper-V only
   runs Windows built for it) and the other kind's second. The Help menu has the same two. They
   open in your browser as you, not as administrator.
-- **New Virtual Machine**: the script's options in a form, with a name that starts with this
-  PC's name (for example `SURFACEPRO7-Win11`) so VMs made on different PCs never share one. Then
+- **New Windows Virtual Machine** (Ctrl+N): the script's options in a form, with a name that
+  starts with this PC's name (for example `SURFACEPRO7-Win11`) so VMs made on different PCs never
+  share one. Then
   the script's own progress as it
   runs, one line at a time, each one also spoken (PowerShell's own error detail lines stay in the
   log but aren't read out). Closing the window during a build stops it and cleans up what it had
@@ -95,6 +96,29 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
   while a build runs.
   New Virtual Machine and the screenshot viewers are windows of their own, so Alt+Tab moves
   between them and the list, and the list stays usable while a build runs.
+- **New Ubuntu Virtual Machine** (Ctrl+Shift+N): an Ubuntu 26.04 LTS desktop, installed with no
+  questions, with the Orca screen reader on. The same window, without the Windows ISO and
+  edition, and with **Orca screen reader on from the start** (Alt+R), checked to begin with. The
+  user name is a Linux one: lower case, starting with a letter. The disk is 64 GB to begin with,
+  and needs at least 32.
+  - **Ubuntu is downloaded** from ubuntu.com the first time, the newest 26.04 release for this
+    PC's processor: about 4 GB on an Arm PC, 6.5 GB on others. It's checked against Ubuntu's
+    published checksums and kept in `%LocalAppData%\HyperVManage\UbuntuInstall` for the next
+    Ubuntu VM. A download that stops partway carries on from where it got to next time.
+  - **Hearing it.** Hyper-V gives a VM no sound card, so, as with Windows, the sound comes over
+    Remote Desktop. Hyper-V's "enhanced session" for Linux is itself Remote Desktop, through a
+    separate program (xrdp) that Ubuntu's GNOME desktop no longer works with, so the VM uses
+    GNOME's own Remote Desktop instead. Inside the VM a desktop session starts by itself when
+    Ubuntu does, with no screen of its own, and Remote Desktop goes straight to it: no second
+    sign-in, Orca already talking, and its speech playing on this PC. Connect with Remote Desktop
+    and Save Connection File work as they do for Windows, and the saved sign-in is the same.
+  - **The console** (Open Console) shows only Ubuntu's sign-in screen, and has no sound.
+    Screenshot shows that screen too, without asking for a sign-in: the session picture is
+    Windows' own, so for a VM that says it runs something else, the VM's own screen is what
+    there is. It's still useful while Ubuntu installs, or if it won't start: Run Windows OCR reads
+    it.
+  - The install takes 20 to 40 minutes. The VM turns itself off when it's done, and the build
+    then removes the installer and starts Ubuntu.
 
 Every action goes through Hyper-V's own PowerShell commands, the way Parallels Manager goes
 through `prlctl`, so anything the app does can be repeated by hand.
@@ -166,7 +190,8 @@ Anywhere in the window:
 
 | Key | Action |
 |---|---|
-| Ctrl+N | New virtual machine |
+| Ctrl+N | New Windows virtual machine |
+| Ctrl+Shift+N | New Ubuntu virtual machine |
 | F5 | Refresh the list |
 | Ctrl+Enter | Start |
 | Ctrl+Period | Shut down |
@@ -228,7 +253,8 @@ HyperVManage.exe --demo
 ```
 
 Three pretend VMs, no Hyper-V, and no administrator rights. Every action and dialog works
-against them, and New Virtual Machine prints the script's steps without running anything.
+against them, and New Windows Virtual Machine and New Ubuntu Virtual Machine print the script's
+steps without running anything.
 Connect, Open Console and Save Connection File say there is no real VM, rather than reaching a
 real one that happens to share a demo VM's name. Screenshot asks for a sign-in (any password
 works) and shows a made-up screen: a blue desktop with a window and a taskbar, with Notepad in
@@ -290,7 +316,7 @@ dotnet test tests\HyperVManage.Tests
 ```
 
 Two tests press real keys at a real window: one checks that the arrow keys move between the
-network choices in New Virtual Machine and that Tab into them never changes the choice, the
+network choices in New Windows Virtual Machine and that Tab into them never changes the choice, the
 other that Tab from the VM list never stops on the menu bar. They take focus from whatever else
 is on screen, so they only run with `HYPERVMANAGE_RUN_INPUT_TESTS=1` set.
 
@@ -372,6 +398,14 @@ tests/HyperVManage.Tests/
 Done so far, on 2 October 2026: building a VM with New Virtual Machine on an Arm64 PC and on an
 x64 PC, each on "Your network"; Connect with Remote Desktop; Open Console; Pause.
 
+On 16 October 2026, on the Arm64 PC, `New-HyperVRdpVM.ps1 -Ubuntu` built Ubuntu VMs end to end
+on "Your network". Ubuntu's installer ran with no questions, Hyper-V reported the address,
+Restart and Shut Down worked through Hyper-V, and the desktop session came back after signing
+out. A Remote Desktop client (FreeRDP, inside the VM) went straight to the desktop with no
+second sign-in, and was sent sound when Orca spoke, when speech-dispatcher spoke and when Ubuntu
+played a sound, and none in silence. A wrong password was refused. Not yet run: the app's own
+New Ubuntu Virtual Machine window on a real build, an x64 PC, and the Default Switch.
+
 Still to do, on a PC with Hyper-V:
 
 1. Confirm the list matches `Get-VM`.
@@ -385,7 +419,9 @@ Still to do, on a PC with Hyper-V:
    with the VM running, paused and saved, and with the keep-it-first box checked and unchecked.
    Clone it, then Delete the clone and confirm its folder and disk are gone.
 7. Connect to a VM from another computer on the network.
-8. Screenshot a running VM at its sign-in screen and at the desktop, a paused one, and one
+8. Build an Ubuntu VM on an x64 PC. On both kinds, connect with Windows' own Remote Desktop
+   and listen for Orca with JAWS and with NVDA running on this PC.
+9. Screenshot a running VM at its sign-in screen and at the desktop, a paused one, and one
    whose display has gone to sleep (it should say blank). Have JAWS Picture Smart and NVDA
    describe the picture, paste it into a web page, and save it. Then the same over Remote
    Desktop: with the window open, minimized, and closed.

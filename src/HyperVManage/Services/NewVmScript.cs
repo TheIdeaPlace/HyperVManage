@@ -9,7 +9,9 @@ using System.Text.Json;
 
 namespace HyperVManage.Services;
 
-/// <summary>What the New VM window asks for: the parameters of New-HyperVRdpVM.ps1.</summary>
+/// <summary>What the New VM window asks for: the parameters of New-HyperVRdpVM.ps1. With
+/// <paramref name="Ubuntu"/> the script builds an Ubuntu desktop instead of Windows; it then
+/// ignores the edition, and an empty ISO path means it downloads Ubuntu itself.</summary>
 public sealed record NewVmOptions(
     string VMName,
     string IsoPath,
@@ -21,7 +23,9 @@ public sealed record NewVmOptions(
     int DiskGB,
     bool HostOnly,
     bool AutoStart,
-    bool Connect);
+    bool Connect,
+    bool Ubuntu = false,
+    bool Orca = true);
 
 /// <summary>How a build ended.</summary>
 public enum BuildOutcome { Succeeded, Failed, Stopped }
@@ -49,6 +53,33 @@ public static class NewVmScript
         return null;
     }
 
+    /// <summary>The smallest disk the script builds an Ubuntu desktop on, in GB.</summary>
+    public const int UbuntuMinimumDiskGB = 32;
+
+    /// <summary>The names Ubuntu's own system accounts use, which its installer refuses for the
+    /// user. The same list as the script's $systemAccounts; a test checks that the two agree.</summary>
+    internal static readonly string[] UbuntuSystemAccounts =
+    [
+        "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail", "news", "uucp",
+        "proxy", "www-data", "backup", "list", "irc", "gnats", "nobody", "messagebus", "syslog", "avahi",
+        "gdm", "gdm-greeter", "sshd", "polkitd", "rtkit", "colord", "pulse", "saned", "cups", "speech-dispatcher",
+        "gnome-initial-setup", "gnome-remote-desktop", "geoclue", "tss", "usbmux", "kernoops", "whoopsie",
+        "dnsmasq", "nm-openvpn", "fwupd-refresh", "tcpdump", "uuidd", "landscape", "admin", "sudo", "adm",
+        "ubuntu", "user", "users", "guest",
+    ];
+
+    /// <summary>Why Ubuntu can't use a user name, or null if it can: the script's own check, asked
+    /// in the form so it shows there rather than as a failed build.</summary>
+    public static string? UbuntuUserNameProblem(string user)
+    {
+        var valid = user.Length is >= 1 and <= 32 && user[0] is >= 'a' and <= 'z'
+            && user.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-' or '_');
+        if (!valid) return "Ubuntu can't use that user name. Start with a lower-case letter, then use up to 31 lower-case letters, digits, hyphens or underscores.";
+        if (UbuntuSystemAccounts.Contains(user) || user.StartsWith("systemd-", StringComparison.Ordinal))
+            return $"Ubuntu keeps the name {user} for itself. Pick another user name.";
+        return null;
+    }
+
     /// <summary>
     /// The PowerShell command that runs the script with these options: every value a quoted
     /// literal, so nothing typed into the form can be read as code. Empty text fields are left
@@ -72,9 +103,10 @@ public static class NewVmScript
     private static string Arguments(NewVmOptions o)
     {
         var sb = new StringBuilder();
+        if (o.Ubuntu) sb.Append(" -Ubuntu");
         sb.Append(" -VMName ").Append(Ps.Quote(o.VMName));
         if (o.IsoPath.Length > 0) sb.Append(" -IsoPath ").Append(Ps.Quote(o.IsoPath));
-        if (o.Edition.Length > 0) sb.Append(" -Edition ").Append(Ps.Quote(o.Edition));
+        if (o.Edition.Length > 0 && !o.Ubuntu) sb.Append(" -Edition ").Append(Ps.Quote(o.Edition));
         if (o.UserName.Length > 0) sb.Append(" -UserName ").Append(Ps.Quote(o.UserName));
         if (o.Password.Length > 0) sb.Append(" -Password ").Append(Ps.Quote(o.Password));
         sb.Append(" -ProcessorCount ").Append(o.ProcessorCount);
@@ -83,21 +115,26 @@ public static class NewVmScript
         if (o.HostOnly) sb.Append(" -HostOnly");
         if (!o.AutoStart) sb.Append(" -NoAutoStart");
         if (!o.Connect) sb.Append(" -NoConnect");
+        if (o.Ubuntu && !o.Orca) sb.Append(" -NoOrca");
         return sb.ToString();
     }
 
     /// <summary>
     /// What the script would refuse, asked before it starts: a VM of that name, or a disk already
-    /// at the path it would build. Also returns that path, which the cleanup after a stop needs;
-    /// knowing the disk didn't exist beforehand is what makes it safe to delete then.
+    /// at the path it would build, the VM's own or an Ubuntu build's installer disk. Also returns
+    /// the VM's disk path, which the cleanup after a stop needs; knowing neither disk existed
+    /// beforehand is what makes it safe to delete them then.
     /// </summary>
     internal static string BuildPrecheckScript(string vmName, string isoPath) => $$"""
         $name = {{Ps.Quote(vmName)}}
         $iso = {{Ps.Quote(isoPath)}}
         $vhd = Join-Path (Get-VMHost).VirtualHardDiskPath "$name.vhdx"
+        $installer = Join-Path (Get-VMHost).VirtualHardDiskPath "$name-installer.vhd"
         ConvertTo-Json -Compress -InputObject ([pscustomobject]@{
             Vhd = $vhd
             VhdExists = [bool](Test-Path -LiteralPath $vhd)
+            Installer = $installer
+            InstallerExists = [bool](Test-Path -LiteralPath $installer)
             VmExists = [bool](Get-VM | Where-Object Name -eq $name)
             IsoWasMounted = [bool]($iso -and (Get-DiskImage -ImagePath $iso -ErrorAction SilentlyContinue).Attached)
         })
@@ -106,12 +143,14 @@ public static class NewVmScript
     /// <summary>
     /// Undoes a build stopped partway. Killing powershell.exe skips the script's own finally
     /// block, which would have done this: dismount the ISO and the half-built disk, and delete
-    /// the disk if no VM was made from it yet. The precheck established that the disk didn't
-    /// exist before the build, so it is the build's own. A VM that already exists is left for
-    /// the user to delete, since by then it is a real VM.
+    /// the disk if no VM was made from it yet, and an Ubuntu build's installer disk with it. The
+    /// precheck established that neither disk existed before the build, so they are the build's
+    /// own. A VM that already exists is left for the user to delete, since by then it is a real
+    /// VM; deleting it deletes its installer disk too.
     /// </summary>
-    internal static string BuildCleanupScript(string vmName, string isoPath, string vhdPath, bool isoWasMounted = false) => $$"""
+    internal static string BuildCleanupScript(string vmName, string isoPath, string vhdPath, bool isoWasMounted = false, string installerPath = "") => $$"""
         $name = {{Ps.Quote(vmName)}}
+        $installer = {{Ps.Quote(installerPath)}}
         # An ISO that was already open before the build, in File Explorer, stays open, as the
         # script itself leaves it.
         $iso = {{(isoWasMounted ? "''" : Ps.Quote(isoPath))}}
@@ -122,11 +161,19 @@ public static class NewVmScript
         try { Dismount-VHD -Path $vhd -ErrorAction Stop } catch { }
         if (Get-VM | Where-Object Name -eq $name) {
             "The virtual machine $name had already been created. Delete it from the list if you don't want it."
-        } elseif (Test-Path -LiteralPath $vhd) {
-            Remove-Item -LiteralPath $vhd -Force
-            "Removed the half-built disk $vhd."
         } else {
-            "Nothing had been built yet."
+            $removed = $false
+            if (Test-Path -LiteralPath $vhd) {
+                Remove-Item -LiteralPath $vhd -Force
+                "Removed the half-built disk $vhd."
+                $removed = $true
+            }
+            if ($installer -and (Test-Path -LiteralPath $installer)) {
+                Remove-Item -LiteralPath $installer -Force
+                "Removed the installer disk $installer."
+                $removed = $true
+            }
+            if (-not $removed) { "Nothing had been built yet." }
         }
         """;
 
@@ -137,12 +184,14 @@ public static class NewVmScript
     public static async Task<BuildOutcome> RunAsync(NewVmOptions options, Action<string> onLine, CancellationToken ct)
     {
         string vhdPath;
+        string installerPath;
         bool isoWasMounted;
         try
         {
             using var doc = JsonDocument.Parse(await PowerShellRunner.RunAsync(BuildPrecheckScript(options.VMName, options.IsoPath), ct).ConfigureAwait(false));
             var r = doc.RootElement;
             vhdPath = r.GetProperty("Vhd").GetString() ?? "";
+            installerPath = r.GetProperty("Installer").GetString() ?? "";
             isoWasMounted = r.TryGetProperty("IsoWasMounted", out var m) && m.ValueKind == JsonValueKind.True;
             if (r.GetProperty("VmExists").GetBoolean())
             {
@@ -152,6 +201,11 @@ public static class NewVmScript
             if (r.GetProperty("VhdExists").GetBoolean())
             {
                 onLine($"The virtual disk {vhdPath} already exists. Delete it or pick another name.");
+                return BuildOutcome.Failed;
+            }
+            if (r.GetProperty("InstallerExists").GetBoolean())
+            {
+                onLine($"The installer disk {installerPath} is left from an earlier build. Delete it or pick another name.");
                 return BuildOutcome.Failed;
             }
         }
@@ -174,7 +228,7 @@ public static class NewVmScript
                 onLine("Stopped. Cleaning up what the build had made so far.");
                 try
                 {
-                    var report = await PowerShellRunner.RunAsync(BuildCleanupScript(options.VMName, options.IsoPath, vhdPath, isoWasMounted)).ConfigureAwait(false);
+                    var report = await PowerShellRunner.RunAsync(BuildCleanupScript(options.VMName, options.IsoPath, vhdPath, isoWasMounted, installerPath)).ConfigureAwait(false);
                     foreach (var line in report.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) onLine(line);
                 }
                 catch (Exception ex) { onLine($"Couldn't clean up: {ex.Message}"); }
@@ -277,16 +331,27 @@ public static class DemoNewVmScript
 
     public static async Task<BuildOutcome> RunAsync(NewVmOptions options, Action<string> onLine, CancellationToken ct)
     {
-        string[] lines =
-        [
-            $"Creating the virtual machine {options.VMName}. (Demo: nothing is really being built.)",
-            "Step 1 of 5: Reading the ISO.",
-            "Step 2 of 5: Creating a virtual disk and copying Windows onto it.",
-            "Step 3 of 5: Making the disk bootable and adding the answer file.",
-            "Step 4 of 5: Creating the virtual machine and starting it.",
-            "Step 5 of 5: Waiting for Windows to finish setting up.",
-            "All done.",
-        ];
+        string[] lines = options.Ubuntu
+            ?
+            [
+                $"Creating the virtual machine {options.VMName}. (Demo: nothing is really being built.)",
+                "Step 1 of 5: Getting Ubuntu.",
+                "Step 2 of 5: Preparing the installer.",
+                "Step 3 of 5: Creating the virtual machine and starting the installer.",
+                "Step 4 of 5: Installing Ubuntu. The VM turns itself off when the install is done.",
+                "Step 5 of 5: Starting Ubuntu.",
+                "All done.",
+            ]
+            :
+            [
+                $"Creating the virtual machine {options.VMName}. (Demo: nothing is really being built.)",
+                "Step 1 of 5: Reading the ISO.",
+                "Step 2 of 5: Creating a virtual disk and copying Windows onto it.",
+                "Step 3 of 5: Making the disk bootable and adding the answer file.",
+                "Step 4 of 5: Creating the virtual machine and starting it.",
+                "Step 5 of 5: Waiting for Windows to finish setting up.",
+                "All done.",
+            ];
         try
         {
             foreach (var line in lines)

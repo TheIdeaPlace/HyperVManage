@@ -84,6 +84,10 @@ public interface IHyperVService
     /// Throws <see cref="SessionScreenshotException"/> saying why when there isn't one to take.</summary>
     Task<SessionScreenshot> TakeSessionScreenshotAsync(string vmId, GuestCredential credential, CancellationToken ct = default);
 
+    /// <summary>The operating system the VM says it runs, such as "Windows 11 Pro" or "Ubuntu", from
+    /// Hyper-V's guest services; null when the VM isn't saying, as when it's off or has none.</summary>
+    Task<string?> GetGuestOsAsync(string vmId, CancellationToken ct = default) => Task.FromResult<string?>(null);
+
     /// <summary>Opens Remote Desktop to the VM.</summary>
     Task ConnectAsync(VmInfo vm, CancellationToken ct = default);
 

@@ -64,7 +64,8 @@ public partial class MainWindow : Window
                 FocusSelectedRow();
         };
         vm.OpenSettings = ShowSettings;
-        vm.OpenNewVm = ShowNewVm;
+        vm.OpenNewVm = () => ShowNewVm(ubuntu: false);
+        vm.OpenNewUbuntuVm = () => ShowNewVm(ubuntu: true);
         vm.ShowScreenshot = ShowScreenshot;
         // Asked from whichever of the app's windows is in front: the list, or a viewer's Take Again.
         // Asked from whichever of the app's windows is in front; the dialog brings itself forward
@@ -199,11 +200,18 @@ public partial class MainWindow : Window
         FocusSelectedRow();
     }
 
-    private void ShowNewVm()
+    private void ShowNewVm(bool ubuntu)
     {
-        // One at a time: the script works on disks and switches that a second run would trip over.
-        if (_newVmWindow is not null) { _newVmWindow.Activate(); return; }
-        var newVm = new NewVmViewModel(_vm.Vms.Select(v => v.Name), _isoHistory);
+        // One at a time, Windows or Ubuntu: the script works on disks and switches that a second
+        // run would trip over.
+        if (_newVmWindow is not null)
+        {
+            _newVmWindow.Activate();
+            // Said, since it may be the other kind of VM from the one asked for.
+            Announcer.Announce(_newVmWindow, $"{_newVmWindow.Title} is already open. One virtual machine is built at a time.");
+            return;
+        }
+        var newVm = new NewVmViewModel(_vm.Vms.Select(v => v.Name), _isoHistory, ubuntu);
         if (_demo) newVm.RunScript = Services.DemoNewVmScript.RunAsync;
         // async void, as an event handler is: everything in it is caught, so nothing can end the app.
         newVm.Finished += async outcome =>
@@ -212,7 +220,8 @@ public partial class MainWindow : Window
             {
                 await _vm.RefreshAsync(quiet: true, mustRead: true);
                 // The sign-in it was built with is the one screenshots need, so it's kept: no asking later.
-                if (outcome == BuildOutcome.Succeeded && _vm.Vms.FirstOrDefault(v => v.Name == newVm.VmName.Trim()) is { } made)
+                // Screenshots of Ubuntu never sign in, so its sign-in isn't kept.
+                if (outcome == BuildOutcome.Succeeded && newVm.IsWindows && _vm.Vms.FirstOrDefault(v => v.Name == newVm.VmName.Trim()) is { } made)
                     _vm.Screenshots.Credentials.Save(made.Id, new GuestCredential(newVm.UserName.Trim(), newVm.Password));
             }
             catch (Exception ex)

@@ -1,4 +1,4 @@
-# Hyper-V Windows VM, ready for Remote Desktop
+# Hyper-V Windows or Ubuntu VM, ready for Remote Desktop
 
 > **Status: works on Arm64 and x64.**
 > - **1 October 2026, Arm64:** the script built a VM end to end on a
@@ -16,7 +16,9 @@
 
 One script that builds a Windows virtual machine in Hyper-V with a fully
 unattended install and leaves it ready to sign in to with Remote Desktop, from
-this PC or from any other computer on your network.
+this PC or from any other computer on your network. With `-Ubuntu` it builds an
+Ubuntu desktop the same way, with the Orca screen reader on: see
+[Ubuntu](#ubuntu).
 
 To do the same from a window instead of the command line, and to manage the VM
 afterwards, use [Hyper-V Manage](../README.md), which runs this script.
@@ -182,21 +184,23 @@ Start-VM SURFACEPRO7-Win11
 
 | Option            | Default                | What it does                                   |
 |-------------------|------------------------|------------------------------------------------|
-| `-IsoPath`        | newest Windows ISO for this PC's processor in the script's own folder, then in Downloads | The Windows ISO to install from |
-| `-VMName`         | this PC's name and `-Win11` | VM name, and the computer name (see [Names](#names)) |
+| `-Ubuntu`         | off                    | Build an Ubuntu desktop instead of Windows (see [Ubuntu](#ubuntu)) |
+| `-IsoPath`        | newest Windows ISO for this PC's processor in the script's own folder, then in Downloads; with `-Ubuntu`, Ubuntu's own download | The ISO to install from |
+| `-VMName`         | this PC's name and `-Win11`, or `-Ubuntu` | VM name, and the computer name (see [Names](#names)) |
 | `-Edition`        | Windows 11 Pro         | Edition inside the ISO. Home is refused.       |
 | `-UserName`       | vmuser                 | Windows account name                           |
 | `-Password`       | vmadmin                | Windows account password                       |
 | `-ProcessorCount` | 4                      | Virtual processors                             |
 | `-MemoryGB`       | 4                      | Starting memory, at least 2; it can grow to twice this, or 8 GB |
-| `-DiskGB`         | 128                    | Virtual disk size                              |
+| `-DiskGB`         | 128, or 64 for Ubuntu  | Virtual disk size; Ubuntu needs at least 32    |
 | `-SwitchName`     | an external switch     | Hyper-V virtual switch. Left out, the VM joins your network through an external switch, created if there isn't one |
 | `-HostOnly`       | off                    | Use the Default Switch: only this PC can reach the VM |
 | `-NoAutoStart`    | off                    | Don't start the VM when this PC starts         |
 | `-VhdFolder`      | Hyper-V's disk folder  | Where the virtual disk goes                    |
 | `-TimeZone`       | this PC's time zone    | Windows time zone name                         |
 | `-Locale`         | the ISO's language     | Language for formats and the keyboard, such as `en-GB` |
-| `-TimeoutMinutes` | 45                     | How long to wait for Windows to finish setting up |
+| `-TimeoutMinutes` | 45, or 90 for Ubuntu   | How long to wait for Windows to finish setting up, or Ubuntu to install |
+| `-NoOrca`         | off                    | With `-Ubuntu`: don't turn the Orca screen reader on |
 | `-NoConnect`      | off                    | Don't open Remote Desktop at the end           |
 | `-Remove`         | off                    | Delete the VM, its disk, connection file and saved sign-in, and anything a failed run left behind |
 
@@ -466,3 +470,63 @@ c0000035, the script does its job by hand. Each step below fixes a failure seen 
   (`@FirewallAPI.dll,-28752`) so it works on non-English Windows. A
   `FirewallGroups` component in the answer file was avoided because a wrong
   group name there can fail the specialize pass.
+
+## Ubuntu
+
+```powershell
+.\New-HyperVRdpVM.ps1 -Ubuntu
+```
+
+builds an Ubuntu 26.04 LTS desktop VM, called this PC's name and `-Ubuntu`,
+with the Orca screen reader on, and opens Remote Desktop to it, straight to the
+desktop. It takes 20 to 40 minutes and needs nothing from you. The user name,
+password, network, processor, memory, start and connect options work as they do
+for Windows. The user name has to be one Linux takes: lower case, starting with
+a letter. `-Edition` doesn't apply. Ubuntu's formats and keyboard follow
+`-Locale`, or this PC's region if it's left out, where Ubuntu has a match among
+the common ones (US English otherwise), and its time zone is this PC's, or
+`-TimeZone`'s.
+
+So far an Ubuntu VM has been built end to end only on an Arm64 PC. The x64 path
+uses the same steps with Ubuntu's x64 ISO, whose boot loader reads its menu the
+same way, but hasn't yet been run.
+
+**Ubuntu is downloaded** from ubuntu.com the first time, the newest 26.04
+release for this PC's processor: about 4 GB on an Arm PC, 6.5 GB on others. It
+is checked against the SHA-256 checksums Ubuntu publishes beside it, and kept in
+`%LocalAppData%\HyperVManage\UbuntuInstall` for next time; one already in your
+Downloads folder with Ubuntu's own name is used if it matches. A download that
+stops partway carries on from where it got to the next time you run the script.
+
+**How the install runs with no questions.** Ubuntu's installer installs without
+asking anything when its start-up line includes `autoinstall`, and reads its
+answers from a disk labelled CIDATA. Hyper-V can't edit a start-up line, and the
+script doesn't change the ISO. Instead the VM first starts from a small disk the
+script writes (`<VM name>-installer.vhd`, beside the VM's own disk). On it are
+the ISO's own boot loader, signed, so Secure Boot stays on; a boot menu, which
+is the ISO's own with `autoinstall` added and everything else read from the ISO;
+and the answers. Ubuntu's boot loader reads its menu from the disk it started
+from, which is what makes this work. The installer turns the VM off when it's
+done; the script then removes the installer disk and the ISO, and starts Ubuntu.
+
+**How you hear it.** Hyper-V gives a VM no sound card, so the sound has to come
+over Remote Desktop, as it does for Windows. Hyper-V's "enhanced session" for
+Linux is Remote Desktop too, through a separate program, xrdp, which needs an
+X11 desktop, and Ubuntu's GNOME desktop no longer has one. So the VM uses
+GNOME's own Remote Desktop instead. Inside the VM:
+
+- A desktop session for your user starts by itself whenever Ubuntu does, with
+  no screen of its own, and starts again if you sign out of it.
+- GNOME Remote Desktop runs inside that session, on Remote Desktop's own port,
+  with your user name and password. Remote Desktop goes straight to the
+  desktop: there's no second sign-in, Orca is already talking, and its speech
+  plays on this PC. The connection file and saved sign-in are made as they are
+  for Windows.
+- A virtual speaker called Remote Desktop is what Ubuntu plays to.
+- The screen never locks or sleeps, since a locked session would ask for the
+  password over Remote Desktop.
+- Hyper-V's guest services run, so Hyper-V knows the VM's address and can shut
+  it down and restart it.
+- An SSH server runs too, with password sign-in: `ssh <user>@<computer>.local`.
+
+The Hyper-V console shows only Ubuntu's sign-in screen, and has no sound.

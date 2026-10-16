@@ -730,4 +730,55 @@ public class ScreenshotWindowTests
         Assert.Null(window.OpenNewVmWindow);
         Assert.Empty(window.OpenScreenshots);
     }
+
+    [StaFact]
+    public async Task MainWindow_NewUbuntuVm_OpensTheWindowForUbuntu_WithOnlyWhatUbuntuNeeds()
+    {
+        TestApp.Ensure();
+        var vm = new MainViewModel(new DemoHyperVService { Delay = TimeSpan.Zero });
+        await vm.RefreshAsync();
+        var window = new MainWindow(vm, demo: true) { Placing = MoveOffscreen };
+        ShowOffscreen(window);
+        Assert.Contains(window.InputBindings.OfType<KeyBinding>(),
+            b => b.Key == Key.N && b.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && b.Command == vm.NewUbuntuVmCommand);
+        vm.NewUbuntuVmCommand.Execute(null);
+        Pump();
+        var newVm = window.OpenNewVmWindow!;
+        Assert.Equal("New Ubuntu Virtual Machine", newVm.Title);
+        Assert.False(((FrameworkElement)newVm.FindName("IsoBox")).IsVisible);
+        Assert.False(((FrameworkElement)newVm.FindName("EditionBox")).IsVisible);
+        var orca = FindAll<CheckBox>(newVm).Single(c => c.Content as string == "Orca screen _reader on from the start");
+        Assert.True(orca.IsVisible);
+        Assert.True(orca.IsChecked);
+
+        // One build at a time: New Windows VM brings the open window forward instead.
+        vm.NewVmCommand.Execute(null);
+        Pump();
+        Assert.Same(newVm, window.OpenNewVmWindow);
+        newVm.Close();
+        Pump();
+        Assert.Null(window.OpenNewVmWindow);
+        window.Close();
+        Pump();
+
+        // And the Windows window has no Orca checkbox to see.
+        var windowsVm = new NewVmWindow(new NewVmViewModel([]));
+        MoveOffscreen(windowsVm);
+        windowsVm.Show();
+        Pump();
+        Assert.Equal("New Windows Virtual Machine", windowsVm.Title);
+        Assert.True(((FrameworkElement)windowsVm.FindName("IsoBox")).IsVisible);
+        Assert.False(FindAll<CheckBox>(windowsVm).Single(c => c.Content as string == "Orca screen _reader on from the start").IsVisible);
+        windowsVm.Close();
+    }
+
+    private static IEnumerable<T> FindAll<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var deeper in FindAll<T>(child)) yield return deeper;
+        }
+    }
 }
