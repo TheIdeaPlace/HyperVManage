@@ -255,11 +255,30 @@ public class ScriptBuildingTests
     public void TheScript_MakesTheSwitchOnlyAfterTheDiskIsBuilt()
     {
         // A wrong ISO or a full disk must never change this PC's networking.
-        var script = File.ReadAllText(Path.Combine(RepoRoot(), "hyperv-rdp-vm", "New-HyperVRdpVM.ps1"));
-        var newSwitch = script.IndexOf("New-VMSwitch -Name $SwitchName", StringComparison.Ordinal);
-        Assert.True(newSwitch > script.IndexOf("Expand-WindowsImage", StringComparison.Ordinal));
-        Assert.True(newSwitch > script.IndexOf("Get-WindowsImage -ImagePath $wim -Index", StringComparison.Ordinal));
-        Assert.True(newSwitch < script.IndexOf("New-VM -Name $VMName", StringComparison.Ordinal));
+        // The switch is made by Add-NetworkSwitch, and the VM by New-BaseVM; what matters is where
+        // each build calls them.
+        var script = File.ReadAllText(Path.Combine(RepoRoot(), "hyperv-rdp-vm", "New-HyperVRdpVM.ps1")).Replace("\r\n", "\n");
+        int At(string text, int from = 0)
+        {
+            var i = script.IndexOf(text, from, StringComparison.Ordinal);
+            Assert.True(i >= 0, $"Not in the script: {text}");
+            return i;
+        }
+        Assert.True(At("function Add-NetworkSwitch") < At("New-VMSwitch -Name $SwitchName")
+                    && At("New-VMSwitch -Name $SwitchName") < At("function New-BaseVM"));
+
+        // Windows: after the image is checked and copied, before the VM.
+        var windows = At("Add-NetworkSwitch @($vhdPath)\n");
+        Assert.True(windows > At("Get-WindowsImage -ImagePath $wim -Index"));
+        Assert.True(windows > At("Expand-WindowsImage"));
+        Assert.True(windows < At("\nNew-BaseVM", windows));
+
+        // Ubuntu: after the ISO is checked and both disks are built, before the VM.
+        var ubuntu = At("Add-NetworkSwitch @($vhdPath, $seedPath)");
+        Assert.True(ubuntu > At("function Test-UbuntuIso"));
+        Assert.True(ubuntu > At("[NewVmSeedDisk]::Write($seedPath"));
+        Assert.True(ubuntu < At("    New-BaseVM", ubuntu));
+        Assert.True(ubuntu < windows, "The Ubuntu build comes first and returns before the Windows one.");
     }
 
     [Fact]
@@ -283,6 +302,7 @@ public class ScriptBuildingTests
         var scripts = new[]
         {
             PowerShellHyperVService.ListScript,
+            PowerShellHyperVService.GuestOsScript,
             PowerShellHyperVService.SwitchScript,
             PowerShellHyperVService.CreateSwitchScript,
             PowerShellHyperVService.BuildCloneScript("id", "copy"),

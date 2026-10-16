@@ -24,7 +24,8 @@ public partial class ShortcutsWindow : Window
         ]),
         ("Anywhere in the main window",
         [
-            ("Ctrl+N", "new virtual machine"),
+            ("Ctrl+N", "new Windows virtual machine"),
+            ("Ctrl+Shift+N", "new Ubuntu virtual machine"),
             ("F5", "refresh the list"),
             ("Ctrl+Enter", "start"),
             ("Ctrl+Period", "shut down"),

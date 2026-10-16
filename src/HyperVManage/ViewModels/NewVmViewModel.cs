@@ -9,6 +9,8 @@ namespace HyperVManage.ViewModels;
 /// <summary>
 /// The New VM window: the options of New-HyperVRdpVM.ps1, then the script's own output as it runs.
 /// Each line the script prints is also spoken, which is how its console reads with a screen reader.
+/// It builds Windows or, opened for Ubuntu, an Ubuntu desktop; that is fixed when it opens, so the
+/// window's title always says which.
 /// </summary>
 public sealed partial class NewVmViewModel : ObservableObject
 {
@@ -25,21 +27,37 @@ public sealed partial class NewVmViewModel : ObservableObject
     public const string BrowseChoice = "Browse for an ISO…";
 
     /// <param name="isoHistory">The ISOs built from before; none if not given.</param>
-    public NewVmViewModel(IEnumerable<string> existingNames, IIsoHistory? isoHistory = null)
+    /// <param name="ubuntu">Build an Ubuntu desktop rather than Windows.</param>
+    public NewVmViewModel(IEnumerable<string> existingNames, IIsoHistory? isoHistory = null, bool ubuntu = false)
     {
+        IsUbuntu = ubuntu;
         _isoHistory = isoHistory ?? new InMemoryIsoHistory();
         var taken = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
         // This PC's name first, as the script does, so VMs made on different PCs on one network
         // don't share a name: two computers with one name confuse Remote Desktop.
-        _vmName = SuggestName($"{Environment.MachineName}-Win11", taken);
+        _vmName = SuggestName($"{Environment.MachineName}-{(ubuntu ? "Ubuntu" : "Win11")}", taken);
+        // Windows 11 needs 64 GB; the Ubuntu desktop far less. The disk grows only as it's used.
+        _diskGB = ubuntu ? "64" : "128";
         // The ISOs used before, most recent first, then the newest in Downloads if it isn't one of
         // them; the most recent is chosen. Then Browse.
-        var newest = IsoFinder.FindNewest(IsoFinder.DownloadsFolder, IsoFinder.HostIsArm64);
+        // Ubuntu's ISO is the script's own download, so Downloads isn't searched for one.
+        var newest = ubuntu ? null : IsoFinder.FindNewest(IsoFinder.DownloadsFolder, IsoFinder.HostIsArm64);
         var choices = _isoHistory.Recent().ToList();
         if (newest is not null && !choices.Contains(newest, StringComparer.OrdinalIgnoreCase)) choices.Add(newest);
         _isoPath = choices.FirstOrDefault() ?? "";
         IsoChoices = [.. choices, BrowseChoice];
     }
+
+    /// <summary>Whether this builds Ubuntu; otherwise Windows.</summary>
+    public bool IsUbuntu { get; }
+    public bool IsWindows => !IsUbuntu;
+
+    public string Title => IsUbuntu ? "New Ubuntu Virtual Machine" : "New Windows Virtual Machine";
+
+    /// <summary>The line at the top of the form, saying what the build does.</summary>
+    public string Intro => IsUbuntu
+        ? "Builds an Ubuntu 26.04 LTS desktop VM with an unattended install, and leaves it ready to connect to with Remote Desktop, which goes straight to the desktop with Orca talking. Ubuntu is downloaded from ubuntu.com the first time, about 4 GB on Arm PCs and 6.5 GB on others, and kept for next time. The install takes 20 to 40 minutes and needs nothing from you once it starts."
+        : "Builds a Windows VM with an unattended install and leaves it ready to sign in to with Remote Desktop. It takes 15 to 30 minutes and needs nothing from you once it starts.";
 
     /// <summary>What the Windows ISO list offers: remembered ISOs, Downloads' newest, then <see cref="BrowseChoice"/>.</summary>
     public System.Collections.ObjectModel.ObservableCollection<string> IsoChoices { get; }
@@ -69,10 +87,12 @@ public sealed partial class NewVmViewModel : ObservableObject
     [ObservableProperty] private string _password = "vmadmin";
     [ObservableProperty] private string _processors = "4";
     [ObservableProperty] private string _memoryGB = "4";
-    [ObservableProperty] private string _diskGB = "128";
+    [ObservableProperty] private string _diskGB;
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(HostOnly))] private bool _onYourNetwork = true;
     [ObservableProperty] private bool _autoStart = true;
     [ObservableProperty] private bool _connectWhenDone = true;
+    /// <summary>Ubuntu only: the Orca screen reader on from the start.</summary>
+    [ObservableProperty] private bool _orca = true;
 
     public bool HostOnly
     {
@@ -109,11 +129,12 @@ public sealed partial class NewVmViewModel : ObservableObject
     {
         string? problem = null;
         var name = VmName.Trim();
-        var iso = IsoPath.Trim();
+        // Ubuntu's ISO is the script's to find or download.
+        var iso = IsUbuntu ? "" : IsoPath.Trim();
         var browseShowing = iso == BrowseChoice;
         // The ISO is always passed explicitly, so a stopped build knows which one to dismount.
         if (browseShowing) iso = "";
-        else if (iso.Length == 0) iso = IsoFinder.FindNewest(IsoFinder.DownloadsFolder, IsoFinder.HostIsArm64) ?? "";
+        else if (iso.Length == 0 && IsWindows) iso = IsoFinder.FindNewest(IsoFinder.DownloadsFolder, IsoFinder.HostIsArm64) ?? "";
 
         // The script mounts the full path, so the cleanup after a stop must dismount that same path.
         if (iso.Length > 0) { try { iso = System.IO.Path.GetFullPath(iso); } catch (Exception) { } }
@@ -123,26 +144,32 @@ public sealed partial class NewVmViewModel : ObservableObject
         var computer = RemoteDesktop.ComputerName(name);
         var user = UserName.Trim();
         var maxProcessors = Math.Min(Environment.ProcessorCount, 64);
+        var system = IsUbuntu ? "Ubuntu" : "Windows";
         if (NewVmScript.NameProblem(name) is { } nameProblem) problem = nameProblem;
-        else if (computer.Length == 0) problem = "The name needs at least one letter or digit, since Windows names the computer after it.";
-        else if (computer.All(char.IsAsciiDigit)) problem = "The name needs at least one letter: Windows can't use a computer name made only of digits.";
-        else if (user.Length > 20 || (user.Length > 0 && user.Trim('.', ' ').Length == 0) || user.IndexOfAny(['"', '/', '\\', '[', ']', ':', ';', '|', '=', ',', '+', '*', '?', '<', '>', '@']) >= 0)
+        else if (computer.Length == 0) problem = $"The name needs at least one letter or digit, since {system} names the computer after it.";
+        else if (computer.All(char.IsAsciiDigit)) problem = $"The name needs at least one letter: {system} can't use a computer name made only of digits.";
+        else if (IsUbuntu && NewVmScript.UbuntuUserNameProblem(user) is { } userProblem) problem = userProblem;
+        else if (IsWindows && (user.Length > 20 || (user.Length > 0 && user.Trim('.', ' ').Length == 0) || user.IndexOfAny(['"', '/', '\\', '[', ']', ':', ';', '|', '=', ',', '+', '*', '?', '<', '>', '@']) >= 0))
             problem = "Windows can't use that user name. Use up to 20 letters, digits, spaces, dots, hyphens or underscores.";
+        // Remote Desktop signs in with the password, so Ubuntu's account needs one.
+        else if (IsUbuntu && Password.Length == 0) problem = "Give the Ubuntu account a password: Remote Desktop signs in with it.";
         else if (Password.Contains('"')) problem = "The password can't contain a double quote (\").";
         else if (browseShowing) problem = "Choose a Windows ISO: press Enter on Browse for an ISO, or pick one from the list.";
-        else if (iso.Length == 0) problem = "There's no Windows ISO in your Downloads folder. Choose Browse for an ISO in the Windows ISO list.";
-        else if (!System.IO.File.Exists(iso)) problem = $"Can't find the ISO {iso}.";
+        else if (IsWindows && iso.Length == 0) problem = "There's no Windows ISO in your Downloads folder. Choose Browse for an ISO in the Windows ISO list.";
+        else if (IsWindows && !System.IO.File.Exists(iso)) problem = $"Can't find the ISO {iso}.";
         else if (!int.TryParse(Processors.Trim(), out var c) || c < 1 || c > maxProcessors)
             problem = $"Processors must be a whole number from 1 to {maxProcessors}.";
         else if (!int.TryParse(MemoryGB.Trim(), out var m) || m < 2 || m > 512) problem = "Memory must be a whole number of gigabytes, from 2 to 512.";
-        else if (!int.TryParse(DiskGB.Trim(), out var d) || d < 64) problem = "Disk size must be a whole number of gigabytes, at least 64. Windows 11 needs that much.";
-        else if (Edition.Contains("Home", StringComparison.OrdinalIgnoreCase)) problem = "Home editions can't accept Remote Desktop connections. Use Pro, Enterprise or Education.";
+        else if (IsWindows && (!int.TryParse(DiskGB.Trim(), out var d) || d < 64)) problem = "Disk size must be a whole number of gigabytes, at least 64. Windows 11 needs that much.";
+        else if (IsUbuntu && (!int.TryParse(DiskGB.Trim(), out var u) || u < NewVmScript.UbuntuMinimumDiskGB))
+            problem = $"Disk size must be a whole number of gigabytes, at least {NewVmScript.UbuntuMinimumDiskGB}. The Ubuntu desktop needs that much.";
+        else if (IsWindows && Edition.Contains("Home", StringComparison.OrdinalIgnoreCase)) problem = "Home editions can't accept Remote Desktop connections. Use Pro, Enterprise or Education.";
 
         Error = problem ?? "";
         if (problem is not null) return null;
-        return new NewVmOptions(name, iso, Edition.Trim(), UserName.Trim(), Password,
+        return new NewVmOptions(name, iso, IsUbuntu ? "" : Edition.Trim(), UserName.Trim(), Password,
             int.Parse(Processors.Trim()), int.Parse(MemoryGB.Trim()), int.Parse(DiskGB.Trim()),
-            HostOnly, AutoStart, ConnectWhenDone);
+            HostOnly, AutoStart, ConnectWhenDone, IsUbuntu, Orca);
     }
 
     [RelayCommand(CanExecute = nameof(CanCreate))]
@@ -152,7 +179,8 @@ public sealed partial class NewVmViewModel : ObservableObject
         if (options is null) { Announce?.Invoke(Error); return; }
 
         // Remembered as the build starts, so it's offered first next time, even if this one fails.
-        _isoHistory.Remember(options.IsoPath);
+        // Ubuntu's ISO is the script's own download, so there is none to remember.
+        if (IsWindows) _isoHistory.Remember(options.IsoPath);
         HasStarted = true;
         IsRunning = true;
         _stop = new CancellationTokenSource();

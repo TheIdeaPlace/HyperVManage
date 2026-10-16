@@ -6,6 +6,7 @@
 
     <Window.InputBindings>
         <KeyBinding Key="N" Modifiers="Control" Command="{Binding NewVmCommand}"/>
+        <KeyBinding Key="N" Modifiers="Control+Shift" Command="{Binding NewUbuntuVmCommand}"/>
         <KeyBinding Key="F5" Command="{Binding RefreshCommand}"/>
         <KeyBinding Key="Enter" Modifiers="Control" Command="{Binding StartCommand}"/>
         <KeyBinding Key="OemPeriod" Modifiers="Control" Command="{Binding ShutDownCommand}"/>
@@ -25,7 +26,8 @@
         <!-- Reached with Alt or F10, as in any Windows app; never a Tab stop. -->
         <Menu DockPanel.Dock="Top" KeyboardNavigation.TabNavigation="None">
             <MenuItem Header="_File">
-                <MenuItem Header="_New Virtual Machine…" Command="{Binding NewVmCommand}" InputGestureText="Ctrl+N"/>
+                <MenuItem Header="_New Windows Virtual Machine…" Command="{Binding NewVmCommand}" InputGestureText="Ctrl+N"/>
+                <MenuItem Header="New _Ubuntu Virtual Machine…" Command="{Binding NewUbuntuVmCommand}" InputGestureText="Ctrl+Shift+N"/>
                 <MenuItem Header="_Refresh" Command="{Binding RefreshCommand}" InputGestureText="F5"/>
                 <Separator/>
                 <MenuItem Header="E_xit" Click="Exit_Click"/>

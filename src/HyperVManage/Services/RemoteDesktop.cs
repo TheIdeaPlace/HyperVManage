@@ -169,7 +169,7 @@ public static class RemoteDesktop
 
     /// <summary>Why there's nothing to connect to yet, and what to do.</summary>
     public static string NoAddress(string vmName) =>
-        $"{vmName} hasn't reported a network address. If it has just started or resumed, wait a minute for Windows inside it to finish starting, then try again.";
+        $"{vmName} hasn't reported a network address. If it has just started or resumed, wait a minute for the system inside it to finish starting, then try again.";
 
     /// <summary>Whether an address leads to this VM and nothing else: one of its addresses, or a
     /// name that resolves only to them.</summary>

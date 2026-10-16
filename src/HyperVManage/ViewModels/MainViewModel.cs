@@ -51,6 +51,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public Func<VmInfo, IReadOnlyList<string>, bool>? ConfirmDelete { get; set; }
     public Action<VmInfo>? OpenSettings { get; set; }
     public Action? OpenNewVm { get; set; }
+    public Action? OpenNewUbuntuVm { get; set; }
     /// <summary>Shows a picture just taken of the VM's screen.</summary>
     public Action<VmInfo, ScreenPicture>? ShowScreenshot { get; set; }
 
@@ -354,6 +355,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [RelayCommand]
     private void NewVm() => OpenNewVm?.Invoke();
+
+    [RelayCommand]
+    private void NewUbuntuVm() => OpenNewUbuntuVm?.Invoke();
 
     /// <summary>Runs one operation on a VM: marks it busy, says what is happening, then refreshes
     /// and says how it ended. Failures carry Hyper-V's own message.</summary>

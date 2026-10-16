@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    Creates a Hyper-V Windows virtual machine with a fully unattended install,
-    ready to sign in to with Remote Desktop.
+    Creates a Hyper-V Windows or Ubuntu virtual machine with a fully unattended
+    install, ready to sign in to with Remote Desktop.
 
 .DESCRIPTION
     Remote Desktop is the only way to get proper audio out of a Hyper-V virtual
     machine for a screen reader, so this script builds a VM that is ready for it
-    the moment the script finishes:
+    the moment the script finishes. For Windows:
 
       1. Applies Windows straight from an ISO onto a new virtual disk. Windows
          Setup never runs, so there is no "press any key to boot from CD"
@@ -20,19 +20,46 @@
          ready-to-use .rdp file on your desktop, stores the sign-in in
          Credential Manager, and opens the connection.
 
+    With -Ubuntu it builds an Ubuntu desktop instead, with the Orca screen
+    reader on:
+
+      1. Downloads Ubuntu's desktop installer the first time, checked against
+         Ubuntu's published checksums, and keeps it for next time.
+      2. Starts the installer from a small disk of its own that adds
+         "autoinstall" to the installer's start-up line and carries the
+         answers, so the installer asks nothing. The ISO itself isn't changed.
+      3. Waits for the install to finish and turn the VM off, then removes the
+         installer and starts Ubuntu.
+      4. Inside Ubuntu, a desktop session starts by itself with no screen of
+         its own, and GNOME Remote Desktop serves it: Remote Desktop goes
+         straight to that desktop, with Orca talking and its sound playing on
+         this PC. The Hyper-V console shows only Ubuntu's sign-in screen, and
+         has no sound.
+
     Every message is plain text, one line at a time, with no progress bars,
     so it reads cleanly with JAWS, NVDA or Narrator.
+
+.PARAMETER Ubuntu
+    Build an Ubuntu desktop VM instead of Windows.
+
+.PARAMETER NoOrca
+    With -Ubuntu: don't turn the Orca screen reader on. It can be turned on
+    later with Super+Alt+S.
 
 .PARAMETER IsoPath
     The Windows ISO. If you leave it out, the newest ISO in your Downloads
     folder with "win" in its name is used. The ISO must match this PC's
     processor: an x64 ISO on an Intel or AMD PC, an Arm64 ISO on an Arm PC.
+    With -Ubuntu, an Ubuntu desktop ISO; left out, the newest Ubuntu release
+    for this PC's processor is downloaded, or the copy downloaded before is
+    used.
 
 .PARAMETER VMName
     Name of the virtual machine. The default is this PC's name followed by
     -Win11, for example SURFACEPRO7-Win11, so VMs made on different PCs on
-    one network don't share a name. It is also the Windows computer name,
-    shortened if needed to Windows' limit of 15 characters: the ending is
+    one network don't share a name; -Ubuntu for an Ubuntu VM. It is also the
+    computer name, Windows' or Ubuntu's, which Ubuntu writes in lower case. It
+    is shortened if needed to Windows' limit of 15 characters: the ending is
     kept, and the start is cut short and followed by four characters worked
     out from the whole name, so SURFACEPRO7-Win11 becomes something like
     SURFAk3x9-Win11. The script prints the computer name it uses, and stops if
@@ -67,6 +94,9 @@
     .\New-HyperVRdpVM.ps1 -IsoPath D:\ISOs\Win11_24H2_English_x64.iso -VMName Test2 -MemoryGB 8
 
 .EXAMPLE
+    .\New-HyperVRdpVM.ps1 -Ubuntu
+
+.EXAMPLE
     .\New-HyperVRdpVM.ps1 -VMName Test2 -Remove
 
 .NOTES
@@ -75,8 +105,12 @@
 #>
 [CmdletBinding()]
 param(
+    [switch]$Ubuntu,
     [string]$IsoPath,
-    [string]$VMName = "$env:COMPUTERNAME-Win11",
+    # The defaults of these three depend on -Ubuntu, so they are filled in below.
+    [string]$VMName,
+    [int]$DiskGB,
+    [int]$TimeoutMinutes,
     [string]$Edition = 'Windows 11 Pro',
     [string]$UserName = 'vmuser',
     [string]$Password = 'vmadmin',
@@ -85,17 +119,23 @@ param(
     # Dynamic memory never goes below 2 GB, so the starting memory can't either.
     [ValidateRange(2, 512)]
     [int]$MemoryGB = 4,
-    [int]$DiskGB = 128,
     [string]$SwitchName,
     [string]$VhdFolder,
     [string]$Locale,
     [string]$TimeZone = (Get-TimeZone).Id,
-    [int]$TimeoutMinutes = 45,
+    [switch]$NoOrca,
     [switch]$NoConnect,
     [switch]$HostOnly,
     [switch]$NoAutoStart,
     [switch]$Remove
 )
+
+if (-not $VMName) { $VMName = if ($Ubuntu) { "$env:COMPUTERNAME-Ubuntu" } else { "$env:COMPUTERNAME-Win11" } }
+# Windows 11 needs 64 GB; the Ubuntu desktop fits in far less, and the disk only takes up
+# what is used either way.
+if (-not $DiskGB) { $DiskGB = if ($Ubuntu) { 64 } else { 128 } }
+# Ubuntu's install downloads its updates as it goes, which can take a while.
+if (-not $TimeoutMinutes) { $TimeoutMinutes = if ($Ubuntu) { 90 } else { 45 } }
 
 $ErrorActionPreference = 'Stop'
 # Progress bars are noisy with a screen reader and slow down image apply.
@@ -211,10 +251,12 @@ if ($Remove) {
 
     # A run that failed after the disk was built but before the VM existed
     # leaves the disk behind, and the next run refuses to overwrite it.
+    # An Ubuntu build stopped partway can leave its installer disk too.
     $folder = if ($VhdFolder) { $VhdFolder } else { (Get-VMHost).VirtualHardDiskPath }
-    $leftover = Join-Path $folder "$VMName.vhdx"
-    if ((Test-Path -LiteralPath $leftover) -and -not ($disks | Where-Object { $_ -and $_.ToLowerInvariant() -eq $leftover.ToLowerInvariant() })) {
-        $disks += $leftover
+    foreach ($leftover in @((Join-Path $folder "$VMName.vhdx"), (Join-Path $folder "$VMName-installer.vhd"))) {
+        if ((Test-Path -LiteralPath $leftover) -and -not ($disks | Where-Object { $_ -and $_.ToLowerInvariant() -eq $leftover.ToLowerInvariant() })) {
+            $disks += $leftover
+        }
     }
 
     # A disk another VM relies on stays: one it has attached, or the parent of one of its
@@ -277,9 +319,24 @@ try {
 if ($answering.Count -gt 0) {
     throw "Another computer on your network is already called $ComputerName (at $($answering -join ', ')). Pick another name with -VMName."
 }
-# Windows would only refuse these inside the VM, after the disk is built, where
-# the failure looks like setup never finishing.
-if ($UserName.Length -lt 1 -or $UserName.Length -gt 20 -or $UserName -match '["/\\\[\]:;|=,+*?<>@]' -or $UserName.Trim('. ') -eq '') {
+# Windows and Ubuntu would only refuse these inside the VM, after the disk is
+# built, where the failure looks like setup never finishing.
+if ($Ubuntu) {
+    # -cnotmatch: Linux user names are lower case, and Ubuntu's installer refuses
+    # the names its own system accounts already use.
+    $systemAccounts = @('root', 'daemon', 'bin', 'sys', 'sync', 'games', 'man', 'lp', 'mail', 'news', 'uucp',
+        'proxy', 'www-data', 'backup', 'list', 'irc', 'gnats', 'nobody', 'messagebus', 'syslog', 'avahi',
+        'gdm', 'gdm-greeter', 'sshd', 'polkitd', 'rtkit', 'colord', 'pulse', 'saned', 'cups', 'speech-dispatcher',
+        'gnome-initial-setup', 'gnome-remote-desktop', 'geoclue', 'tss', 'usbmux', 'kernoops', 'whoopsie',
+        'dnsmasq', 'nm-openvpn', 'fwupd-refresh', 'tcpdump', 'uuidd', 'landscape', 'admin', 'sudo', 'adm',
+        'ubuntu', 'user', 'users', 'guest')
+    if ($UserName -cnotmatch '^[a-z][a-z0-9_-]{0,31}$') {
+        throw "Ubuntu can't use '$UserName' as a user name. Start with a lower-case letter, then use up to 31 lower-case letters, digits, hyphens or underscores."
+    }
+    if ($systemAccounts -contains $UserName -or $UserName -like 'systemd-*') {
+        throw "Ubuntu keeps the name '$UserName' for itself. Pick another user name."
+    }
+} elseif ($UserName.Length -lt 1 -or $UserName.Length -gt 20 -or $UserName -match '["/\\\[\]:;|=,+*?<>@]' -or $UserName.Trim('. ') -eq '') {
     throw "Windows can't use '$UserName' as a user name. Use 1 to 20 letters, digits, spaces, dots, hyphens or underscores."
 }
 # Remote Desktop won't sign in to an account with no password, and a double
@@ -291,7 +348,10 @@ if ($Locale) {
     try { $null = [Globalization.CultureInfo]::GetCultureInfo($Locale) }
     catch { throw "'$Locale' isn't a language Windows knows. Use a tag such as en-US or en-GB." }
 }
-if ($Edition -match 'Home') {
+if ($Ubuntu -and $DiskGB -lt 32) {
+    throw "The Ubuntu desktop needs a disk of at least 32 GB. Pass a larger -DiskGB."
+}
+if (-not $Ubuntu -and $Edition -match 'Home') {
     throw "$Edition can't accept Remote Desktop connections. Use a Pro, Enterprise or Education edition."
 }
 if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
@@ -360,7 +420,7 @@ if ($SwitchName) {
 $archNames = @{ 0 = 'x86'; 9 = 'x64'; 12 = 'Arm64' }
 $hostArch = [int](Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture
 
-if (-not $IsoPath) {
+if (-not $IsoPath -and -not $Ubuntu) {
     # An ISO kept next to the script wins, so a folder carried to another PC
     # (on OneDrive or a USB stick) brings its ISO with it. Downloads is next.
     $downloads = Join-Path $env:USERPROFILE 'Downloads'
@@ -382,8 +442,10 @@ if (-not $IsoPath) {
     }
     $IsoPath = $iso.FullName
 }
-if (-not (Test-Path -LiteralPath $IsoPath)) { throw "Can't find the ISO $IsoPath." }
-$IsoPath = (Resolve-Path -LiteralPath $IsoPath).Path
+if ($IsoPath) {
+    if (-not (Test-Path -LiteralPath $IsoPath)) { throw "Can't find the ISO $IsoPath." }
+    $IsoPath = (Resolve-Path -LiteralPath $IsoPath).Path
+}
 
 if (-not $VhdFolder) { $VhdFolder = (Get-VMHost).VirtualHardDiskPath }
 New-Item -ItemType Directory -Path $VhdFolder -Force | Out-Null
@@ -392,10 +454,16 @@ if (Test-Path -LiteralPath $vhdPath) {
     throw "The virtual disk $vhdPath already exists. Delete it or pick another VM name."
 }
 
+$osName = if ($Ubuntu) { 'Ubuntu' } else { 'Windows' }
 Say "Creating the virtual machine $VMName."
-if ($ComputerName -ne $VMName) { Say "Its Windows computer name is $ComputerName, which Windows limits to 15 characters." }
-Say "Windows image: $IsoPath"
-Say 'This usually takes 15 to 30 minutes. You do not need to do anything until it finishes.'
+if ($Ubuntu) {
+    Say "Its computer name is $($ComputerName.ToLowerInvariant())."
+    Say 'This usually takes 20 to 40 minutes, and longer the first time, when Ubuntu is downloaded. You do not need to do anything until it finishes.'
+} else {
+    if ($ComputerName -ne $VMName) { Say "Its Windows computer name is $ComputerName, which Windows limits to 15 characters." }
+    Say "Windows image: $IsoPath"
+    Say 'This usually takes 15 to 30 minutes. You do not need to do anything until it finishes.'
+}
 
 if ($createSwitchOn) {
     Say "Network: a new Hyper-V switch named $SwitchName on $($createSwitchOn.Name), so other computers can reach the VM. It is made once the virtual disk is ready."
@@ -403,6 +471,995 @@ if ($createSwitchOn) {
     Say 'Network: the Default Switch. Only this PC can reach the VM.'
 } else {
     Say "Network: the $SwitchName switch."
+}
+
+# --- Network switch -----------------------------------------------------------
+# Made only once every check and the disks have been built, so a wrong ISO or a
+# full disk never changes this PC's networking. If it fails, the disks the build
+# made are removed, so they don't block a second run.
+function Add-NetworkSwitch([string[]]$RemoveOnFailure) {
+    if (-not $createSwitchOn) { return }
+    Step "Setting up network access: creating the Hyper-V switch $SwitchName on $($createSwitchOn.Name)."
+    Say "This PC's network connection drops for a few seconds while Windows sets it up."
+    try {
+        New-VMSwitch -Name $SwitchName -NetAdapterName $createSwitchOn.Name -AllowManagementOS $true -ErrorAction Stop | Out-Null
+    } catch {
+        # Leave nothing that would block a second run: the disks go too.
+        foreach ($disk in $RemoveOnFailure) { Remove-Item -LiteralPath $disk -Force -ErrorAction SilentlyContinue }
+        throw "Couldn't create the switch $SwitchName on $($createSwitchOn.Name): $($_.Exception.Message) If this PC has lost its network connection, remove what was made with: Remove-VMSwitch -Name '$SwitchName' -Force. Then run the script again, or add -HostOnly to keep the VM on this PC only."
+    }
+    # Wait for this PC's own connection to come back, now through the switch.
+    $netDeadline = (Get-Date).AddSeconds(90)
+    while (-not (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias "vEthernet ($SwitchName)" -ErrorAction SilentlyContinue) -and (Get-Date) -lt $netDeadline) {
+        Start-Sleep -Seconds 3
+    }
+    if (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias "vEthernet ($SwitchName)" -ErrorAction SilentlyContinue) {
+        Say 'The switch is ready and this PC is back on the network.'
+    } else {
+        Say "This PC hasn't got its network connection back through the switch yet. The VM is being set up anyway."
+        Say "If the connection doesn't return, remove the switch with: Remove-VMSwitch -Name '$SwitchName' -Force"
+    }
+}
+
+# --- The VM itself ------------------------------------------------------------
+# What every VM the script makes has, whatever runs in it. With -Later, starting with this PC
+# is left to the caller to set once the VM is ready: an Ubuntu VM still holding its installer
+# disk would install itself over again if the PC restarted first.
+function New-BaseVM([switch]$Later) {
+    New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ([int64]$MemoryGB * 1GB) -VHDPath $vhdPath -SwitchName $SwitchName | Out-Null
+    Set-VMProcessor -VMName $VMName -Count $ProcessorCount
+    Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes 2GB -StartupBytes ([int64]$MemoryGB * 1GB) -MaximumBytes ([int64][Math]::Max($MemoryGB * 2, 8) * 1GB)
+    Set-VM -Name $VMName -AutomaticCheckpointsEnabled $false
+    if ($Later) {
+        Set-VM -Name $VMName -AutomaticStartAction Nothing
+    } elseif (-not $NoAutoStart) {
+        # Start with this PC every time, not only when it was running at shutdown,
+        # so turning the PC on is all it takes to be able to connect.
+        Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 0
+    }
+}
+
+# --- Connection file and saved sign-in -----------------------------------------
+# The end of every build: wait for Remote Desktop to answer at the VM's address,
+# save the connection file and the sign-in, and open it.
+function Test-RdpPort([string]$HostName) {
+    $client = New-Object Net.Sockets.TcpClient
+    try { return $client.ConnectAsync($HostName, 3389).Wait(3000) -and $client.Connected }
+    catch { return $false }
+    finally { $client.Dispose() }
+}
+
+function Complete-Connection([string]$Address) {
+    # Connect by name where one points at the VM, since its address can change: the
+    # Default Switch hands out a new one when this PC restarts, and a router can too.
+    # The Default Switch publishes <computer>.mshome.net, visible only to this PC.
+    # On your own network the VM answers to <computer>.local, which other Windows
+    # PCs and Macs can look up too; it can take a little while to start answering.
+    $names = if ($SwitchName -eq 'Default Switch') { @("$ComputerName.mshome.net") } else { @("$ComputerName.local", $ComputerName) }
+    $target = $Address
+    $nameDeadline = (Get-Date).AddSeconds(60)
+    do {
+        foreach ($name in $names) {
+            try {
+                # Only a name that means this VM alone. Another computer with the same
+                # name on the network answers too, and Remote Desktop could pick it.
+                $resolved = @([Net.Dns]::GetHostAddresses($name) |
+                    Where-Object AddressFamily -eq 'InterNetwork' | ForEach-Object IPAddressToString)
+                if ($resolved.Count -gt 0 -and -not ($resolved | Where-Object { $_ -ne $Address })) { $target = $name; break }
+            } catch { }
+        }
+        if ($target -ne $Address) { break }
+        Start-Sleep -Seconds 5
+    } while ((Get-Date) -lt $nameDeadline)
+
+    $rdpDeadline = (Get-Date).AddMinutes(5)
+    while (-not (Test-RdpPort $target)) {
+        if ((Get-Date) -gt $rdpDeadline) {
+            throw "$osName is set up, but Remote Desktop isn't answering at $target. Try restarting the VM in Hyper-V Manager, then connect to $target."
+        }
+        Start-Sleep -Seconds 5
+    }
+    Say 'Remote Desktop is answering.'
+
+    # audiomode 0 plays the VM's sound on this PC; audiocapturemode 1 sends this
+    # PC's microphone to the VM. Authentication level 0 skips the certificate
+    # warning that a brand-new VM's self-signed certificate would otherwise raise.
+    $rdp = @(
+        "full address:s:$target"
+        "username:s:$ComputerName\$UserName"
+        'prompt for credentials:i:0'
+        'authentication level:i:0'
+        'audiomode:i:0'
+        'audiocapturemode:i:1'
+        'redirectclipboard:i:1'
+        'autoreconnection enabled:i:1'
+        'screen mode id:i:2'
+    )
+    Set-Content -LiteralPath $rdpFile -Value $rdp -Encoding ASCII
+    cmdkey /generic:"TERMSRV/$target" /user:"$ComputerName\$UserName" /pass:"$Password" | Out-Null
+
+    Write-Host ''
+    Say 'All done.'
+    Say "Virtual machine: $VMName"
+    Say "Connect to: $target"
+    if ((Get-VMSwitch -Name $SwitchName).SwitchType -eq 'External') {
+        Say 'Other computers on your network can connect to that address too.'
+    }
+    if (-not $NoAutoStart) {
+        Say 'The virtual machine starts whenever this PC starts.'
+    }
+    Say "User name: $UserName"
+    Say "Password: $Password"
+    Say "Connection file: $rdpFile"
+    Say 'The sign-in is saved, so opening the connection file signs you in without typing the password.'
+    Say 'Remote Desktop still asks each time whether to allow sound, the microphone and the clipboard. Choose Connect.'
+    if ($Ubuntu) {
+        Say "Remote Desktop goes straight to the Ubuntu desktop, already signed in$(if (-not $NoOrca) { ', with Orca talking' })."
+        Say "The Hyper-V console shows only Ubuntu's sign-in screen, and has no sound."
+    }
+
+    if (-not $NoConnect) {
+        Say 'Opening Remote Desktop now.'
+        Start-Process -FilePath mstsc.exe -ArgumentList "`"$rdpFile`""
+    }
+}
+
+# --- Ubuntu --------------------------------------------------------------------
+# Ubuntu's own installer does the install, with "autoinstall" on its start-up line
+# so it asks nothing. Hyper-V can't edit that line, and the ISO isn't changed, so
+# the VM first starts from a small disk the script makes: on it are the ISO's own
+# signed boot loader (so Secure Boot stays on), a boot menu that adds
+# "autoinstall" and finds everything else on the ISO, and the installer's answers.
+# The boot loader reads its menu from the disk it started from, which is what
+# makes this work.
+#
+# Hyper-V gives a VM no sound card, so sound has to come over Remote Desktop.
+# Inside Ubuntu, a desktop session starts at boot with no screen of its own, and
+# GNOME Remote Desktop, running inside that session, serves it: Remote Desktop
+# goes straight to the desktop, with no second sign-in, and Orca's speech plays
+# on this PC. The VM has no virtual TPM: GNOME Remote Desktop would keep its
+# sign-in there instead of in the file the installer writes.
+if ($Ubuntu) {
+    $ubuntuSeries = '26.04'
+    $ubuntuArch = if ($hostArch -eq 12) { 'arm64' } else { 'amd64' }
+    # Ubuntu keeps Arm64 releases on cdimage and x64 ones on releases.
+    $ubuntuBase = if ($ubuntuArch -eq 'arm64') { "https://cdimage.ubuntu.com/ubuntu/releases/$ubuntuSeries/release" } else { "https://releases.ubuntu.com/$ubuntuSeries" }
+    $ubuntuIsoPattern = "^ubuntu-$([regex]::Escape($ubuntuSeries))(\.\d+)?-desktop-$ubuntuArch\.iso$"
+    $ubuntuCache = Join-Path $env:LOCALAPPDATA 'HyperVManage\UbuntuInstall'
+    $seedPath = Join-Path $VhdFolder "$VMName-installer.vhd"
+    if (Test-Path -LiteralPath $seedPath) {
+        throw "The installer disk $seedPath is left from an earlier run. Delete it, or run the script with -Remove."
+    }
+
+    if (-not ('NewVmSeedDisk' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+
+// The installer's disk: a fixed VHD holding one FAT16 partition, written byte by byte so
+// nothing has to be mounted. Every name gets a long-name entry, so case and length are kept.
+// The disk's last sector is left outside the partition: the install writes FinishedMark there
+// as its very last step, which is how the script knows it finished rather than just stopped.
+public static class NewVmSeedDisk {
+    public const string FinishedMark = "HYPERVMANAGE-UBUNTU-INSTALLED";
+    const int Sector = 512;
+    const int SectorsPerCluster = 4;
+    const int ClusterBytes = Sector * SectorsPerCluster;
+    const int PartitionStart = 2048;
+    const int ReservedSectors = 4;
+    const int RootEntries = 512;
+
+    class Node {
+        public string Name;
+        public byte[] Data;                       // null for a folder
+        public List<Node> Children = new List<Node>();
+        public int FirstCluster;
+        public byte[] ShortName;
+    }
+
+    // files: a path on the disk, such as "EFI/BOOT/BOOTAA64.EFI", to its bytes.
+    public static void Write(string vhdPath, string label, IDictionary<string, byte[]> files, int sizeMB) {
+        long totalSectors = (long)sizeMB * 1024 * 1024 / Sector;
+        long partSectors = totalSectors - PartitionStart - 1;
+        if (partSectors > 65535) throw new ArgumentException("The installer disk must be under 32 MB.");
+
+        Node root = new Node { Name = "" };
+        foreach (KeyValuePair<string, byte[]> f in files) {
+            string[] parts = f.Key.Split('/');
+            Node at = root;
+            for (int i = 0; i < parts.Length; i++) {
+                Node next = null;
+                foreach (Node c in at.Children) if (string.Equals(c.Name, parts[i], StringComparison.OrdinalIgnoreCase)) next = c;
+                if (next == null) {
+                    next = new Node { Name = parts[i] };
+                    at.Children.Add(next);
+                }
+                if (i == parts.Length - 1) next.Data = f.Value;
+                at = next;
+            }
+        }
+
+        int rootSectors = RootEntries * 32 / Sector;
+        // The FAT's size depends on the number of clusters, which depends on the FAT's size;
+        // a few rounds settle it.
+        int fatSectors = 1;
+        for (int i = 0; i < 4; i++) {
+            long clustersGuess = (partSectors - ReservedSectors - 2 * fatSectors - rootSectors) / SectorsPerCluster;
+            fatSectors = (int)(((clustersGuess + 2) * 2 + Sector - 1) / Sector);
+        }
+        long dataStart = ReservedSectors + 2 * fatSectors + rootSectors;
+        long clusterCount = (partSectors - dataStart) / SectorsPerCluster;
+        if (clusterCount < 4085 || clusterCount > 65524) throw new ArgumentException("That size doesn't make a FAT16 volume.");
+
+        byte[] disk = new byte[totalSectors * Sector];
+        ushort[] fat = new ushort[clusterCount + 2];
+        fat[0] = 0xFFF8; fat[1] = 0xFFFF;
+        int nextCluster = 2;
+        long partOffset = (long)PartitionStart * Sector;
+        Func<int, int> allocate = delegate (int bytes) {
+            int n = Math.Max(1, (bytes + ClusterBytes - 1) / ClusterBytes);
+            if (nextCluster + n > clusterCount + 2) throw new InvalidOperationException("The files don't fit on the installer disk.");
+            int first = nextCluster;
+            for (int k = 0; k < n; k++) fat[first + k] = (ushort)(k == n - 1 ? 0xFFFF : first + k + 1);
+            nextCluster += n;
+            return first;
+        };
+        Func<int, long> clusterOffset = delegate (int cluster) {
+            return partOffset + (dataStart + (long)(cluster - 2) * SectorsPerCluster) * Sector;
+        };
+
+        // Every folder and file gets its clusters, depth first.
+        Action<Node> place = null;
+        place = delegate (Node folder) {
+            AssignShortNames(folder.Children);
+            foreach (Node c in folder.Children) {
+                if (c.Data != null) {
+                    c.FirstCluster = c.Data.Length == 0 ? 0 : allocate(c.Data.Length);
+                    if (c.FirstCluster != 0) Buffer.BlockCopy(c.Data, 0, disk, (int)clusterOffset(c.FirstCluster), c.Data.Length);
+                } else {
+                    c.FirstCluster = allocate(EntriesBytes(c));
+                    place(c);
+                }
+            }
+        };
+        place(root);
+
+        // Folder contents: the top folder's in its fixed area, the rest in their clusters.
+        Action<Node, Node> writeFolder = null;
+        writeFolder = delegate (Node folder, Node parent) {
+            MemoryStream entries = new MemoryStream();
+            if (folder == root) {
+                entries.Write(Entry(Pad(label.ToUpperInvariant(), 11), 0x08, 0, 0), 0, 32);
+            } else {
+                entries.Write(Entry(Pad(".", 11), 0x10, folder.FirstCluster, 0), 0, 32);
+                entries.Write(Entry(Pad("..", 11), 0x10, parent == root ? 0 : parent.FirstCluster, 0), 0, 32);
+            }
+            foreach (Node c in folder.Children) {
+                foreach (byte[] lfn in LongNameEntries(c.Name, c.ShortName)) entries.Write(lfn, 0, 32);
+                entries.Write(Entry(c.ShortName, (byte)(c.Data == null ? 0x10 : 0x20), c.FirstCluster, c.Data == null ? 0 : c.Data.Length), 0, 32);
+            }
+            byte[] bytes = entries.ToArray();
+            if (folder == root) {
+                if (bytes.Length > RootEntries * 32) throw new InvalidOperationException("Too many files in the installer disk's top folder.");
+                Buffer.BlockCopy(bytes, 0, disk, (int)(partOffset + (ReservedSectors + 2L * fatSectors) * Sector), bytes.Length);
+            } else {
+                Buffer.BlockCopy(bytes, 0, disk, (int)clusterOffset(folder.FirstCluster), bytes.Length);
+            }
+            foreach (Node c in folder.Children) if (c.Data == null) writeFolder(c, folder);
+        };
+        writeFolder(root, null);
+
+        // The partition's boot sector.
+        int b = (int)partOffset;
+        disk[b] = 0xEB; disk[b + 1] = 0x3C; disk[b + 2] = 0x90;
+        Encoding.ASCII.GetBytes("MSWIN4.1").CopyTo(disk, b + 3);
+        Le16(disk, b + 11, Sector);
+        disk[b + 13] = SectorsPerCluster;
+        Le16(disk, b + 14, ReservedSectors);
+        disk[b + 16] = 2;
+        Le16(disk, b + 17, RootEntries);
+        Le16(disk, b + 19, (int)partSectors);
+        disk[b + 21] = 0xF8;
+        Le16(disk, b + 22, fatSectors);
+        Le16(disk, b + 24, 63);
+        Le16(disk, b + 26, 255);
+        Le32(disk, b + 28, PartitionStart);
+        disk[b + 36] = 0x80;
+        disk[b + 38] = 0x29;
+        Le32(disk, b + 39, (uint)Environment.TickCount);
+        Pad(label.ToUpperInvariant(), 11).CopyTo(disk, b + 43);
+        Encoding.ASCII.GetBytes("FAT16   ").CopyTo(disk, b + 54);
+        disk[b + 510] = 0x55; disk[b + 511] = 0xAA;
+
+        // Both copies of the FAT.
+        for (int copy = 0; copy < 2; copy++) {
+            int f = b + (ReservedSectors + copy * fatSectors) * Sector;
+            for (int i = 0; i < fat.Length; i++) Le16(disk, f + i * 2, fat[i]);
+        }
+
+        // The partition table: one partition of type EF, the EFI system partition, which is
+        // where the firmware looks for a boot loader.
+        disk[446 + 1] = 0xFE; disk[446 + 2] = 0xFF; disk[446 + 3] = 0xFF;
+        disk[446 + 4] = 0xEF;
+        disk[446 + 5] = 0xFE; disk[446 + 6] = 0xFF; disk[446 + 7] = 0xFF;
+        Le32(disk, 446 + 8, PartitionStart);
+        Le32(disk, 446 + 12, (uint)partSectors);
+        Le32(disk, 440, (uint)Environment.TickCount ^ 0x5EED);
+        disk[510] = 0x55; disk[511] = 0xAA;
+
+        using (FileStream fs = new FileStream(vhdPath, FileMode.CreateNew, FileAccess.Write)) {
+            fs.Write(disk, 0, disk.Length);
+            byte[] footer = VhdFooter(disk.LongLength);
+            fs.Write(footer, 0, footer.Length);
+        }
+    }
+
+    // Whether the install wrote FinishedMark into the disk's last sector.
+    public static bool Finished(string vhdPath) {
+        using (FileStream fs = new FileStream(vhdPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
+            if (fs.Length < 1024) return false;
+            byte[] sector = new byte[Sector];
+            fs.Seek(fs.Length - 512 - Sector, SeekOrigin.Begin);
+            int read = 0;
+            while (read < Sector) { int n = fs.Read(sector, read, Sector - read); if (n <= 0) return false; read += n; }
+            return Encoding.ASCII.GetString(sector, 0, FinishedMark.Length) == FinishedMark;
+        }
+    }
+
+    static int EntriesBytes(Node folder) {
+        int n = 2;
+        foreach (Node c in folder.Children) n += 2 + (c.Name.Length + 12) / 13;
+        return n * 32;
+    }
+
+    // The short name only has to be unique in its folder, since every name has a long one too.
+    static void AssignShortNames(List<Node> children) {
+        HashSet<string> used = new HashSet<string>();
+        foreach (Node c in children) {
+            string upper = c.Name.ToUpperInvariant();
+            int dot = upper.LastIndexOf('.');
+            string stem = Clean(dot > 0 ? upper.Substring(0, dot) : upper);
+            string ext = Clean(dot > 0 ? upper.Substring(dot + 1) : "");
+            if (ext.Length > 3) ext = ext.Substring(0, 3);
+            string candidate = stem.Length > 8 ? null : stem;
+            if (candidate == null || candidate.Length == 0 || used.Contains(candidate + "." + ext)) {
+                for (int i = 1; ; i++) {
+                    string tail = "~" + i;
+                    string s = stem.Length + tail.Length > 8 ? stem.Substring(0, Math.Max(0, 8 - tail.Length)) : stem;
+                    candidate = s + tail;
+                    if (!used.Contains(candidate + "." + ext)) break;
+                }
+            }
+            used.Add(candidate + "." + ext);
+            byte[] sn = new byte[11];
+            for (int i = 0; i < 11; i++) sn[i] = 0x20;
+            Encoding.ASCII.GetBytes(candidate).CopyTo(sn, 0);
+            Encoding.ASCII.GetBytes(ext).CopyTo(sn, 8);
+            c.ShortName = sn;
+        }
+    }
+
+    static string Clean(string s) {
+        StringBuilder sb = new StringBuilder();
+        foreach (char ch in s) if ((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') sb.Append(ch);
+        return sb.ToString();
+    }
+
+    static List<byte[]> LongNameEntries(string name, byte[] shortName) {
+        byte sum = 0;
+        foreach (byte c in shortName) sum = (byte)(((sum & 1) << 7) + (sum >> 1) + c);
+        int count = (name.Length + 12) / 13;
+        int[] slots = { 1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30 };
+        List<byte[]> result = new List<byte[]>();
+        // Stored last part first.
+        for (int n = count; n >= 1; n--) {
+            byte[] e = new byte[32];
+            e[0] = (byte)(n | (n == count ? 0x40 : 0));
+            e[11] = 0x0F;
+            e[13] = sum;
+            for (int k = 0; k < 13; k++) {
+                int i = (n - 1) * 13 + k;
+                int ch = i < name.Length ? name[i] : (i == name.Length ? 0 : 0xFFFF);
+                Le16(e, slots[k], ch);
+            }
+            result.Add(e);
+        }
+        return result;
+    }
+
+    static byte[] Entry(byte[] shortName, byte attributes, int cluster, int size) {
+        byte[] e = new byte[32];
+        shortName.CopyTo(e, 0);
+        e[11] = attributes;
+        // 1 January 2026, midday; FAT dates count from 1980.
+        int date = ((2026 - 1980) << 9) | (1 << 5) | 1;
+        int time = 12 << 11;
+        Le16(e, 14, time); Le16(e, 16, date); Le16(e, 18, date);
+        Le16(e, 22, time); Le16(e, 24, date);
+        Le16(e, 26, cluster);
+        Le32(e, 28, (uint)size);
+        return e;
+    }
+
+    static byte[] Pad(string s, int length) {
+        byte[] r = new byte[length];
+        for (int i = 0; i < length; i++) r[i] = i < s.Length ? (byte)s[i] : (byte)0x20;
+        return r;
+    }
+
+    static void Le16(byte[] a, int at, int v) { a[at] = (byte)v; a[at + 1] = (byte)(v >> 8); }
+    static void Le32(byte[] a, int at, uint v) { for (int i = 0; i < 4; i++) a[at + i] = (byte)(v >> (8 * i)); }
+    static void Be32(byte[] a, int at, uint v) { for (int i = 0; i < 4; i++) a[at + i] = (byte)(v >> (24 - 8 * i)); }
+    static void Be64(byte[] a, int at, ulong v) { for (int i = 0; i < 8; i++) a[at + i] = (byte)(v >> (56 - 8 * i)); }
+
+    // The 512 bytes after the data that make a raw disk image a fixed VHD.
+    static byte[] VhdFooter(long size) {
+        byte[] f = new byte[512];
+        Encoding.ASCII.GetBytes("conectix").CopyTo(f, 0);
+        Be32(f, 8, 2);
+        Be32(f, 12, 0x00010000);
+        Be64(f, 16, ulong.MaxValue);
+        Be32(f, 24, (uint)(DateTime.UtcNow - new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds);
+        Encoding.ASCII.GetBytes("win ").CopyTo(f, 28);
+        Be32(f, 32, 0x000A0000);
+        Encoding.ASCII.GetBytes("Wi2k").CopyTo(f, 36);
+        Be64(f, 40, (ulong)size);
+        Be64(f, 48, (ulong)size);
+        // Cylinders, heads and sectors, by the VHD specification's own rule.
+        long sectors = Math.Min(size / 512, 65535L * 16 * 255);
+        int spt, heads; long cth;
+        if (sectors >= 65535L * 16 * 63) { spt = 255; heads = 16; cth = sectors / spt; }
+        else {
+            spt = 17; cth = sectors / spt;
+            heads = (int)((cth + 1023) / 1024);
+            if (heads < 4) heads = 4;
+            if (cth >= heads * 1024 || heads > 16) { spt = 31; heads = 16; cth = sectors / spt; }
+            if (cth >= heads * 1024) { spt = 63; heads = 16; cth = sectors / spt; }
+        }
+        long cylinders = cth / heads;
+        f[56] = (byte)(cylinders >> 8); f[57] = (byte)cylinders; f[58] = (byte)heads; f[59] = (byte)spt;
+        Be32(f, 60, 2);
+        Guid.NewGuid().ToByteArray().CopyTo(f, 68);
+        uint checksum = 0;
+        foreach (byte x in f) checksum += x;
+        Be32(f, 64, ~checksum);
+        return f;
+    }
+}
+
+// The $6$ password hash Linux keeps in /etc/shadow (SHA-512 crypt), which Ubuntu's installer
+// takes instead of the password itself.
+public static class NewVmSha512Crypt {
+    const string Alphabet = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+    public static string NewSalt() {
+        byte[] r = new byte[16];
+        using (RandomNumberGenerator rng = RandomNumberGenerator.Create()) rng.GetBytes(r);
+        StringBuilder sb = new StringBuilder();
+        foreach (byte x in r) sb.Append(Alphabet[x % 64]);
+        return sb.ToString();
+    }
+
+    public static string Hash(string password, string salt) { return Hash(password, salt, 5000, false); }
+
+    // rounds and explicitRounds are for the specification's own test vectors.
+    public static string Hash(string password, string salt, int rounds, bool explicitRounds) {
+        byte[] p = Encoding.UTF8.GetBytes(password);
+        if (salt.Length > 16) salt = salt.Substring(0, 16);
+        byte[] s = Encoding.UTF8.GetBytes(salt);
+
+        using (SHA512 sha = SHA512.Create()) {
+            byte[] b = sha.ComputeHash(Concat(Concat(p, s), p));
+
+            byte[] aInput = Concat(p, s);
+            int len = p.Length;
+            for (; len > 64; len -= 64) aInput = Concat(aInput, b);
+            aInput = Concat(aInput, Slice(b, len));
+            for (int n = p.Length; n > 0; n >>= 1) aInput = Concat(aInput, (n & 1) != 0 ? b : p);
+            byte[] a = sha.ComputeHash(aInput);
+
+            byte[] dpInput = new byte[0];
+            for (int i = 0; i < p.Length; i++) dpInput = Concat(dpInput, p);
+            byte[] pSeq = Repeat(sha.ComputeHash(dpInput), p.Length);
+
+            byte[] dsInput = new byte[0];
+            for (int i = 0; i < 16 + a[0]; i++) dsInput = Concat(dsInput, s);
+            byte[] sSeq = Repeat(sha.ComputeHash(dsInput), s.Length);
+
+            byte[] c = a;
+            for (int r = 0; r < rounds; r++) {
+                byte[] input = (r & 1) != 0 ? pSeq : c;
+                if (r % 3 != 0) input = Concat(input, sSeq);
+                if (r % 7 != 0) input = Concat(input, pSeq);
+                input = Concat(input, (r & 1) != 0 ? c : pSeq);
+                c = sha.ComputeHash(input);
+            }
+
+            StringBuilder o = new StringBuilder("$6$");
+            if (explicitRounds) o.Append("rounds=").Append(rounds).Append('$');
+            o.Append(salt).Append('$');
+            int[,] order = {
+                {0,21,42},{22,43,1},{44,2,23},{3,24,45},{25,46,4},{47,5,26},{6,27,48},{28,49,7},{50,8,29},{9,30,51},
+                {31,52,10},{53,11,32},{12,33,54},{34,55,13},{56,14,35},{15,36,57},{37,58,16},{59,17,38},{18,39,60},
+                {40,61,19},{62,20,41} };
+            for (int i = 0; i < 21; i++) Encode(o, c[order[i, 0]], c[order[i, 1]], c[order[i, 2]], 4);
+            Encode(o, 0, 0, c[63], 2);
+            return o.ToString();
+        }
+    }
+
+    static void Encode(StringBuilder o, byte b2, byte b1, byte b0, int n) {
+        int w = (b2 << 16) | (b1 << 8) | b0;
+        for (int i = 0; i < n; i++) { o.Append(Alphabet[w & 0x3f]); w >>= 6; }
+    }
+
+    static byte[] Concat(byte[] x, byte[] y) {
+        byte[] r = new byte[x.Length + y.Length];
+        Buffer.BlockCopy(x, 0, r, 0, x.Length);
+        Buffer.BlockCopy(y, 0, r, x.Length, y.Length);
+        return r;
+    }
+
+    static byte[] Slice(byte[] x, int n) { byte[] r = new byte[n]; Buffer.BlockCopy(x, 0, r, 0, n); return r; }
+
+    static byte[] Repeat(byte[] d, int n) {
+        byte[] r = new byte[n];
+        for (int i = 0; i < n; i++) r[i] = d[i % 64];
+        return r;
+    }
+}
+
+// Windows' time zone names to the ones Linux uses (America/Chicago), from Windows' own copy
+// of ICU. Null if Windows doesn't know the name.
+public static class NewVmTimeZone {
+    [DllImport("icu.dll", CharSet = CharSet.Unicode)]
+    static extern int ucal_getTimeZoneIDForWindowsID(string winid, int len, string region, StringBuilder id, int capacity, ref int status);
+
+    public static string ToIana(string windowsId) {
+        try {
+            StringBuilder sb = new StringBuilder(128);
+            int status = 0;
+            int n = ucal_getTimeZoneIDForWindowsID(windowsId, -1, null, sb, sb.Capacity, ref status);
+            return status <= 0 && n > 0 ? sb.ToString(0, n) : null;
+        } catch (DllNotFoundException) { return null; } catch (EntryPointNotFoundException) { return null; }
+    }
+}
+'@
+    }
+
+    # --- Step 1: the installer ISO ---
+    Step 'Step 1 of 5: Getting Ubuntu.'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    Add-Type -AssemblyName System.Net.Http
+    $http = New-Object Net.Http.HttpClient
+    $http.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+    $http.DefaultRequestHeaders.UserAgent.ParseAdd('HyperVManage')
+
+    # Ubuntu's list of every ISO in this release and its SHA-256, newest point release last.
+    $sums = @{}
+    try {
+        $list = $http.GetStringAsync("$ubuntuBase/SHA256SUMS").GetAwaiter().GetResult()
+        foreach ($line in $list -split "`n") {
+            if ($line -notmatch '^([0-9a-f]{64}) \*?(\S+)\s*$') { continue }
+            # Kept before the next -match replaces $Matches.
+            $listedHash, $listedName = $Matches[1], $Matches[2]
+            if ($listedName -match $ubuntuIsoPattern) { $sums[$listedName] = $listedHash }
+        }
+    } catch {
+        $e = $_.Exception
+        while ($e.InnerException) { $e = $e.InnerException }
+        Say "Couldn't reach Ubuntu's download site: $($e.Message)"
+    }
+    # 26.04.1 sorts after 26.04, which [version] reads as 26.4 with no third part.
+    $newest = $sums.Keys | Sort-Object { [version]($_ -replace '^ubuntu-' -replace '-desktop.*$') } | Select-Object -Last 1
+
+    function Test-UbuntuIso([string]$Path) {
+        Say "Checking $Path against Ubuntu's checksum."
+        $hash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        return [bool]($sums.Values | Where-Object { $_ -eq $hash })
+    }
+
+    if ($IsoPath) {
+        if ((Split-Path -Leaf $IsoPath) -notmatch $ubuntuIsoPattern) {
+            throw "$IsoPath isn't an Ubuntu $ubuntuSeries desktop ISO for this PC's processor. It should be named like ubuntu-$ubuntuSeries.1-desktop-$ubuntuArch.iso. Leave out -IsoPath and the script downloads the right one."
+        }
+        if ($sums.Count -eq 0) {
+            Say "Using $IsoPath without checking it, since Ubuntu's checksums couldn't be downloaded."
+        } elseif (-not (Test-UbuntuIso $IsoPath)) {
+            throw "$IsoPath doesn't match the checksum of any Ubuntu $ubuntuSeries release Ubuntu publishes now. It may be an older release, or damaged. Leave out -IsoPath and the script downloads the current one."
+        }
+    } else {
+        $downloads = Join-Path $env:USERPROFILE 'Downloads'
+        if ($newest) {
+            # One already downloaded, here or by hand, is used if it is intact.
+            foreach ($candidate in @((Join-Path $ubuntuCache $newest), (Join-Path $downloads $newest))) {
+                if ((Test-Path -LiteralPath $candidate) -and (Test-UbuntuIso $candidate)) { $IsoPath = $candidate; break }
+            }
+            if ($IsoPath) {
+                Say "Using $IsoPath, downloaded before."
+            } else {
+                New-Item -ItemType Directory -Path $ubuntuCache -Force | Out-Null
+                $cacheFree = (Get-Item -LiteralPath $ubuntuCache).PSDrive.Free
+                if ($ubuntuArch -eq 'arm64') { $isoGB = 5 } else { $isoGB = 7 }
+                if ($cacheFree -lt [int64]$isoGB * 1GB) {
+                    throw "Ubuntu's installer needs about $isoGB GB free to download into $ubuntuCache, and there's $('{0:0.0}' -f ($cacheFree / 1GB)) GB. Make room and run the script again."
+                }
+                $IsoPath = Join-Path $ubuntuCache $newest
+                Remove-Item -LiteralPath $IsoPath -Force -ErrorAction SilentlyContinue
+                $part = "$IsoPath.part"
+                # A download stopped partway carries on from where it got to.
+                $have = if (Test-Path -LiteralPath $part) { (Get-Item -LiteralPath $part).Length } else { 0 }
+                $request = New-Object Net.Http.HttpRequestMessage ([Net.Http.HttpMethod]::Get), "$ubuntuBase/$newest"
+                if ($have -gt 0) { $request.Headers.Range = New-Object Net.Http.Headers.RangeHeaderValue ([Nullable[long]]$have), ([Nullable[long]]$null) }
+                $response = $http.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+                if ([int]$response.StatusCode -eq 416) {
+                    # Asked for more than there is: the earlier download had finished.
+                    $response.Dispose()
+                } else {
+                    if (-not $response.IsSuccessStatusCode) { throw "Couldn't download $newest from Ubuntu: $([int]$response.StatusCode) $($response.ReasonPhrase)." }
+                    if ([int]$response.StatusCode -ne 206) { $have = 0 }
+                    if (-not $response.Content.Headers.ContentLength) { throw "Ubuntu's download site didn't say how big $newest is. Try again later." }
+                    $total = $have + [long]$response.Content.Headers.ContentLength
+                    $gb = { param($bytes) '{0:0.0}' -f ($bytes / 1GB) }
+                    if ($have -gt 0) {
+                        Say "Carrying on with the download of $newest from $(& $gb $have) GB of $(& $gb $total) GB."
+                    } else {
+                        Say "Downloading $newest from ubuntu.com, $(& $gb $total) GB. It's kept for the next Ubuntu VM."
+                    }
+                    $source = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+                    $target = New-Object IO.FileStream $part, ($(if ($have -gt 0) { [IO.FileMode]::Append } else { [IO.FileMode]::Create })), ([IO.FileAccess]::Write)
+                    try {
+                        $buffer = New-Object byte[] (1MB)
+                        $done = $have
+                        # A line every tenth of the way, so a screen reader isn't flooded.
+                        $nextTenth = [Math]::Floor($done * 10 / $total) + 1
+                        while (($read = $source.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                            $target.Write($buffer, 0, $read)
+                            $done += $read
+                            if ($done * 10 / $total -ge $nextTenth -and $done -lt $total) {
+                                Say "Downloaded $(& $gb $done) GB of $(& $gb $total) GB."
+                                $nextTenth = [Math]::Floor($done * 10 / $total) + 1
+                            }
+                        }
+                    } finally {
+                        $target.Dispose()
+                        $source.Dispose()
+                        $response.Dispose()
+                    }
+                    if ($done -lt $total) { throw "The download of $newest stopped partway. Run the script again to carry on from where it got to." }
+                }
+                Move-Item -LiteralPath $part -Destination $IsoPath -Force
+                if (-not (Test-UbuntuIso $IsoPath)) {
+                    Remove-Item -LiteralPath $IsoPath -Force
+                    throw "The download of $newest doesn't match Ubuntu's checksum, so it was deleted. Run the script again to download it again."
+                }
+                Say 'Downloaded, and it matches.'
+                # Each is 4 to 6.5 GB: the releases this one replaces aren't kept.
+                Get-ChildItem -LiteralPath $ubuntuCache -File |
+                    Where-Object { $_.Name -ne $newest -and ($_.Name -match $ubuntuIsoPattern -or $_.Name -match ($ubuntuIsoPattern -replace '\$$', '\.part$')) } |
+                    ForEach-Object {
+                        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+                        Say "Deleted $($_.Name), which this release replaces."
+                    }
+            }
+        } else {
+            # Offline: an ISO downloaded before still does, unchecked.
+            $IsoPath = Get-ChildItem -LiteralPath $ubuntuCache -Filter '*.iso' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match $ubuntuIsoPattern } | Sort-Object { [version]($_.Name -replace '^ubuntu-' -replace '-desktop.*$') } |
+                Select-Object -Last 1 -ExpandProperty FullName
+            if (-not $IsoPath) {
+                throw "Can't download Ubuntu, and there's no copy from before. Connect to the internet and run the script again, or pass an Ubuntu $ubuntuSeries desktop ISO with -IsoPath."
+            }
+            Say "Using $IsoPath, downloaded before. It couldn't be checked against Ubuntu's checksums this time."
+        }
+    }
+    $http.Dispose()
+
+    # --- Step 2: the installer's disk and the VM's own ---
+    Step 'Step 2 of 5: Preparing the installer.'
+    # Windows' own tar reads ISO files, so nothing is mounted.
+    $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    if (-not (Test-Path -LiteralPath $tar)) { throw "This version of Windows has no $tar, which the script uses to read the ISO. Update Windows and run the script again." }
+    $isoFiles = Join-Path $env:TEMP "NewVmUbuntu-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $isoFiles | Out-Null
+    $files = New-Object 'System.Collections.Generic.Dictionary[string,byte[]]'
+    try {
+        # Through cmd, as with bcdboot: Windows PowerShell stops on the first line a
+        # program writes to its error output when that is redirected.
+        $tarOutput = cmd /c "`"$tar`" -xf `"$IsoPath`" -C `"$isoFiles`" EFI/boot boot/grub/grub.cfg 2>&1" | Out-String
+        $grubCfg = Join-Path $isoFiles 'boot\grub\grub.cfg'
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $grubCfg)) {
+            throw "Couldn't read the boot files from $IsoPath. $($tarOutput.Trim())"
+        }
+        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $isoFiles 'EFI\boot') -File) {
+            $files["EFI/BOOT/$($f.Name.ToUpperInvariant())"] = [IO.File]::ReadAllBytes($f.FullName)
+        }
+        $grub = [IO.File]::ReadAllText($grubCfg)
+    } finally {
+        Remove-Item -LiteralPath $isoFiles -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    # The ISO's own menu, with "autoinstall" added and a 1-second wait, read from
+    # the ISO's drive: the search finds the ISO, which alone has the kernel.
+    $menuEntries = [regex]::Matches($grub, '(?m)^\s*linux\s+/casper/vmlinuz(?=\s)').Count
+    if ($menuEntries -eq 0) { throw "$IsoPath doesn't look like an Ubuntu desktop ISO: its boot menu has no installer to start." }
+    $grub = $grub -replace '(?m)^set timeout=\d+', 'set timeout=1'
+    $grub = $grub -replace '(?m)^(\s*linux\s+/casper/vmlinuz)(?=\s)', '$1 autoinstall ds=nocloud'
+    $grub = "search --no-floppy --set=root --file /casper/vmlinuz`nset prefix=(`$root)/boot/grub`n" + $grub
+
+    $hostName = $ComputerName.ToLowerInvariant()
+    # Formats and language from this PC where Ubuntu has a match, otherwise US
+    # English. A locale Ubuntu doesn't have would stop the install.
+    $culture = if ($Locale) { $Locale } else { (Get-Culture).Name }
+    $knownLocales = @('en-US', 'en-GB', 'en-AU', 'en-CA', 'en-IE', 'en-NZ', 'en-ZA', 'en-IN', 'de-DE', 'de-AT', 'de-CH',
+        'fr-FR', 'fr-CA', 'fr-BE', 'fr-CH', 'es-ES', 'es-MX', 'it-IT', 'pt-PT', 'pt-BR', 'nl-NL', 'nl-BE', 'sv-SE',
+        'nb-NO', 'da-DK', 'fi-FI', 'pl-PL', 'ja-JP')
+    $ubuntuLocale = if ($knownLocales -contains $culture) { ($culture -replace '-', '_') + '.UTF-8' } else { 'en_US.UTF-8' }
+    # The keyboard layout the region uses, where it isn't the US one.
+    $layouts = @{ 'en-GB' = 'gb'; 'en-IE' = 'ie'; 'de-DE' = 'de'; 'de-AT' = 'at'; 'de-CH' = 'ch'; 'fr-FR' = 'fr'; 'fr-CA' = 'ca';
+        'fr-BE' = 'be'; 'fr-CH' = 'ch'; 'es-ES' = 'es'; 'es-MX' = 'latam'; 'it-IT' = 'it'; 'pt-PT' = 'pt'; 'pt-BR' = 'br';
+        'nl-BE' = 'be'; 'sv-SE' = 'se'; 'nb-NO' = 'no'; 'da-DK' = 'dk'; 'fi-FI' = 'fi'; 'pl-PL' = 'pl'; 'ja-JP' = 'jp' }
+    $keyboard = if ($layouts.ContainsKey($culture)) { $layouts[$culture] } else { 'us' }
+    $ianaZone = [NewVmTimeZone]::ToIana($TimeZone)
+    if (-not $ianaZone) { $ianaZone = 'Etc/UTC'; Say "Ubuntu has no time zone matching '$TimeZone', so it uses UTC." }
+
+    # YAML single-quoted strings: a quote is written twice.
+    function ConvertTo-Yaml([string]$Value) { "'" + $Value.Replace("'", "''") + "'" }
+    $passwordHash = [NewVmSha512Crypt]::Hash($Password, [NewVmSha512Crypt]::NewSalt())
+    $userData = @"
+#cloud-config
+autoinstall:
+  version: 1
+  interactive-sections: []
+  locale: $(ConvertTo-Yaml $ubuntuLocale)
+  keyboard: {layout: $(ConvertTo-Yaml $keyboard)}
+  timezone: $(ConvertTo-Yaml $ianaZone)
+  source: {id: ubuntu-desktop}
+  identity:
+    hostname: $(ConvertTo-Yaml $hostName)
+    username: $(ConvertTo-Yaml $UserName)
+    realname: $(ConvertTo-Yaml $UserName)
+    password: $(ConvertTo-Yaml $passwordHash)
+  ssh:
+    install-server: true
+    allow-pw: true
+  storage:
+    layout: {name: direct}
+  codecs: {install: true}
+  updates: security
+  # Hyper-V's guest services, which tell Hyper-V the VM's address. Ubuntu builds
+  # them for Arm64 only in its Azure tools; they run on any kernel.
+  packages:
+    - linux-cloud-tools-azure
+  late-commands:
+    - mkdir -p /run/hypervmanage && mount -o ro LABEL=CIDATA /run/hypervmanage && bash /run/hypervmanage/setup.sh; status=`$?; umount /run/hypervmanage; exit `$status
+  shutdown: poweroff
+"@
+
+    # GNOME Remote Desktop's sign-in, as its own grdctl writes it: a GVariant in a
+    # GKeyFile. The password is quoted for GVariant, then backslashes are doubled
+    # again for the key file. User names can't hold anything that needs quoting.
+    $gvPassword = $Password.Replace('\', '\\').Replace("'", "\'")
+    $credentials = "[RDP]`ncredentials={'username': <'$UserName'>, 'password': <'$($gvPassword.Replace('\', '\\'))'>}`n"
+    $screenReader = if ($NoOrca) { 'false' } else { 'true' }
+
+    # Runs at the end of the install, in the installer, with Ubuntu at /target.
+    $setup = @"
+#!/bin/bash
+set -eu
+U='$UserName'
+T=/target
+H=`$T/home/`$U
+G=`$H/.local/share/gnome-remote-desktop
+uid=`$(chroot `$T id -u `$U)
+gid=`$(chroot `$T id -g `$U)
+
+# A desktop session for Remote Desktop, started at boot with no screen of its own,
+# and started again if it ends, as when signing out.
+cat > `$T/etc/systemd/system/hypervmanage-remote-session.service <<EOF
+[Unit]
+Description=Desktop session for Remote Desktop (made by Hyper-V Manage)
+Requires=gdm.service
+After=gdm.service
+
+[Service]
+ExecStart=/usr/libexec/gdm-new-session `$U --headless
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target
+EOF
+mkdir -p `$T/etc/systemd/system/graphical.target.wants
+ln -sf /etc/systemd/system/hypervmanage-remote-session.service `$T/etc/systemd/system/graphical.target.wants/hypervmanage-remote-session.service
+
+# GNOME Remote Desktop inside that session, on Remote Desktop's own port, with
+# a certificate of its own and the user's sign-in.
+mkdir -p `$H/.config/systemd/user/gnome-session.target.wants `$G
+ln -sf /usr/lib/systemd/user/gnome-remote-desktop-headless.service `$H/.config/systemd/user/gnome-session.target.wants/gnome-remote-desktop-headless.service
+chroot `$T openssl req -new -newkey rsa:3072 -days 3650 -nodes -x509 -subj '/CN=$hostName' -keyout /home/`$U/.local/share/gnome-remote-desktop/rdp-tls.key -out /home/`$U/.local/share/gnome-remote-desktop/rdp-tls.crt 2>/dev/null
+install -m 600 /run/hypervmanage/credentials.ini `$G/credentials.ini
+chmod 700 `$H/.local/share/gnome-remote-desktop
+chmod 600 `$G/rdp-tls.key
+
+# No first-run wizard, which would also ask for the password to change privacy settings, nor
+# the one for what's new in this release, which has a marker of its own named after it.
+release=`$(. `$T/etc/os-release; echo `$VERSION_ID)
+mkdir -p `$H/.config/gnome-initial-setup
+echo yes > `$H/.config/gnome-initial-setup-done
+touch `$H/.config/gnome-initial-setup/upgrade-`$release-done
+chown -R `$uid:`$gid `$H/.config `$H/.local
+
+# Settings for every session: Remote Desktop on, Orca on, and no locking or
+# sleeping, since a locked session asks for the password over Remote Desktop.
+mkdir -p `$T/etc/dconf/profile `$T/etc/dconf/db/local.d
+printf 'user-db:user\nsystem-db:local\n' > `$T/etc/dconf/profile/user
+cat > `$T/etc/dconf/db/local.d/00-hypervmanage <<EOF
+[org/gnome/desktop/remote-desktop/rdp]
+enable=true
+view-only=false
+tls-cert='/home/`$U/.local/share/gnome-remote-desktop/rdp-tls.crt'
+tls-key='/home/`$U/.local/share/gnome-remote-desktop/rdp-tls.key'
+
+[org/gnome/desktop/remote-desktop/rdp/headless]
+enable=true
+
+[org/gnome/desktop/a11y/applications]
+screen-reader-enabled=$screenReader
+
+[org/gnome/desktop/a11y]
+always-show-universal-access-status=true
+
+[org/gnome/desktop/session]
+idle-delay=uint32 0
+
+[org/gnome/desktop/screensaver]
+lock-enabled=false
+
+[org/gnome/settings-daemon/plugins/power]
+sleep-inactive-ac-type='nothing'
+EOF
+chroot `$T dconf update
+
+# A speaker for Remote Desktop to play. Without a sound card PipeWire's stand-in
+# can stall speech until something plays from it.
+mkdir -p `$T/etc/pipewire/pipewire.conf.d
+cat > `$T/etc/pipewire/pipewire.conf.d/50-hypervmanage-remote-desktop.conf <<EOF
+context.objects = [
+  { factory = adapter
+    args = {
+      factory.name     = support.null-audio-sink
+      node.name        = "remote-desktop-speaker"
+      node.description = "Remote Desktop"
+      media.class      = "Audio/Sink"
+      audio.position   = [ FL FR ]
+      priority.session = 2000
+      monitor.channel-volumes = true
+    }
+  }
+]
+EOF
+
+# Hyper-V's guest services from the Azure tools, whichever version is newest:
+# Ubuntu's own launcher looks only for tools matching the running kernel.
+mkdir -p `$T/etc/systemd/system/hv-kvp-daemon.service.d
+cat > `$T/etc/systemd/system/hv-kvp-daemon.service.d/hypervmanage.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/bin/sh -c 'exec "`$(ls -d /usr/lib/linux-*tools-*/hv_kvp_daemon | sort -V | tail -n 1)" -n'
+EOF
+
+# No crash reports to answer.
+if [ -f `$T/etc/default/apport ]; then sed -i 's/^enabled=.*/enabled=0/' `$T/etc/default/apport; fi
+
+# Last: tell the script the install finished, in the installer disk's last sector, which is
+# outside its partition. Turning off alone doesn't say that: Hyper-V turns a VM off too when
+# it can't recover from an error, such as this PC's drive filling up.
+disk=/dev/`$(lsblk -no PKNAME "`$(readlink -f /dev/disk/by-label/CIDATA)")
+printf '$([NewVmSeedDisk]::FinishedMark)' | dd of="`$disk" bs=512 seek=`$((`$(blockdev --getsz "`$disk") - 1)) conv=sync,notrunc status=none
+sync
+"@
+
+    $vhdFree = (Get-Item -LiteralPath $VhdFolder).PSDrive.Free
+    if ($vhdFree -lt 20GB) {
+        throw "Ubuntu needs about 20 GB free for the VM's disk in $VhdFolder, and there's $('{0:0.0}' -f ($vhdFree / 1GB)) GB. When the drive fills during the install, Hyper-V pauses the VM. Make room and run the script again."
+    }
+    New-VHD -Path $vhdPath -SizeBytes ([uint64]$DiskGB * 1GB) -Dynamic | Out-Null
+    try {
+        $files['boot/grub/grub.cfg'] = [Text.Encoding]::UTF8.GetBytes($grub.Replace("`r`n", "`n"))
+        $files['user-data'] = [Text.Encoding]::UTF8.GetBytes($userData.Replace("`r`n", "`n"))
+        $files['meta-data'] = [Text.Encoding]::UTF8.GetBytes("instance-id: $([guid]::NewGuid())`nlocal-hostname: $hostName`n")
+        $files['setup.sh'] = [Text.Encoding]::UTF8.GetBytes($setup.Replace("`r`n", "`n"))
+        $files['credentials.ini'] = [Text.Encoding]::UTF8.GetBytes($credentials)
+        [NewVmSeedDisk]::Write($seedPath, 'CIDATA', $files, 24)
+    } catch {
+        Remove-Item -LiteralPath $vhdPath, $seedPath -Force -ErrorAction SilentlyContinue
+        throw
+    }
+
+    Add-NetworkSwitch @($vhdPath, $seedPath)
+
+    # --- Step 3: the VM ---
+    Step 'Step 3 of 5: Creating the virtual machine and starting the installer.'
+    New-BaseVM -Later
+    # Ubuntu's boot loader is signed by Microsoft's third-party certificate, not
+    # the Windows one Hyper-V uses by default.
+    Set-VMFirmware -VMName $VMName -SecureBootTemplate MicrosoftUEFICertificateAuthority
+    Add-VMHardDiskDrive -VMName $VMName -Path $seedPath
+    Add-VMDvdDrive -VMName $VMName -Path $IsoPath
+    Set-VMFirmware -VMName $VMName -FirstBootDevice (Get-VMHardDiskDrive -VMName $VMName | Where-Object Path -eq $seedPath)
+    Set-VM -Name $VMName -Notes "Ubuntu $ubuntuSeries desktop, made by Hyper-V Manage. Connect with Remote Desktop: the console has no sound."
+    Start-VM -Name $VMName
+
+    # --- Step 4: the install ---
+    Step 'Step 4 of 5: Installing Ubuntu. The VM turns itself off when the install is done.'
+    $started = Get-Date
+    $deadline = $started.AddMinutes($TimeoutMinutes)
+    $nextNote = $started.AddMinutes(3)
+    while (($vmNow = Get-VM -Name $VMName).State -ne 'Off') {
+        if ($vmNow.State -eq 'Paused') {
+            throw "Hyper-V paused the virtual machine during the install ($($vmNow.Status)). That most often means the drive holding its disk, $VhdFolder, is full. Make room, then delete this VM with: .\New-HyperVRdpVM.ps1 -VMName $VMName -Remove, and run the script again."
+        }
+        if ((Get-Date) -gt $deadline) {
+            throw "Ubuntu's installer didn't finish within $TimeoutMinutes minutes. The VM is left running: Screenshot in Hyper-V Manage shows its screen, and Run Windows OCR reads it. Delete it with: .\New-HyperVRdpVM.ps1 -VMName $VMName -Remove"
+        }
+        if ((Get-Date) -gt $nextNote) {
+            Say "Still installing. $([int]((Get-Date) - $started).TotalMinutes) minutes so far."
+            $nextNote = (Get-Date).AddMinutes(3)
+        }
+        Start-Sleep -Seconds 15
+    }
+    if (-not [NewVmSeedDisk]::Finished($seedPath)) {
+        throw "The virtual machine turned off before Ubuntu's installer had finished. Screenshot can't show why once it's off. Delete it with: .\New-HyperVRdpVM.ps1 -VMName $VMName -Remove, and run the script again; if it happens again, check there's room on the drive holding $VhdFolder."
+    }
+    Say "Ubuntu is installed, after $([int]((Get-Date) - $started).TotalMinutes) minutes."
+
+    # --- Step 5: first start ---
+    Step 'Step 5 of 5: Starting Ubuntu.'
+    Get-VMHardDiskDrive -VMName $VMName | Where-Object Path -eq $seedPath | Remove-VMHardDiskDrive
+    # The installer ejects the ISO as it finishes, and Hyper-V then often can't find the empty
+    # drive to remove it. An empty drive does no harm, so it stays; only the ISO must go.
+    Get-VMDvdDrive -VMName $VMName | Where-Object Path | Set-VMDvdDrive -Path $null
+    try { Remove-Item -LiteralPath $seedPath -Force -ErrorAction Stop }
+    catch { Say "Couldn't delete the installer disk $seedPath, which holds the password. Delete it by hand. $($_.Exception.Message)" }
+    if (-not $NoAutoStart) { Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 0 }
+    Start-VM -Name $VMName
+
+    # Hyper-V learns the address from the guest services. Should they not report
+    # it, the name the VM gives itself on the network does, but only after a few
+    # minutes, and only where Remote Desktop answers: a name can still lead to an
+    # earlier VM's address, such as one deleted and rebuilt with the same name.
+    $names = if ($SwitchName -eq 'Default Switch') { @("$ComputerName.mshome.net") } else { @("$ComputerName.local") }
+    $address = $null
+    $startedUbuntu = Get-Date
+    $addressDeadline = $startedUbuntu.AddMinutes(10)
+    while (-not $address) {
+        if ((Get-VM -Name $VMName).State -eq 'Off') {
+            throw "The virtual machine turned itself off as Ubuntu started. Open it in Hyper-V Manager to see why, or delete it with: .\New-HyperVRdpVM.ps1 -VMName $VMName -Remove"
+        }
+        $address = Get-VMNetworkAdapter -VMName $VMName | ForEach-Object { $_.IPAddresses } |
+            Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -notlike '169.254.*' } | Select-Object -First 1
+        if (-not $address -and (Get-Date) -gt $startedUbuntu.AddMinutes(3)) {
+            foreach ($name in $names) {
+                try {
+                    $found = [Net.Dns]::GetHostAddresses($name) | Where-Object AddressFamily -eq 'InterNetwork' |
+                        Select-Object -First 1 | ForEach-Object IPAddressToString
+                    if ($found -and (Test-RdpPort $found)) { $address = $found; break }
+                } catch { }
+            }
+        }
+        if ($address) { break }
+        if ((Get-Date) -gt $addressDeadline) {
+            throw "Ubuntu is installed, but the virtual machine hasn't been given a network address in 10 minutes on the $SwitchName switch. Some routers refuse a second address over Wi-Fi. Plug this PC into Ethernet, or start again with -HostOnly. Delete this VM first with: .\New-HyperVRdpVM.ps1 -VMName $VMName -Remove"
+        }
+        Start-Sleep -Seconds 10
+    }
+    Say "Ubuntu is running. The virtual machine's address is $address."
+    Complete-Connection $address
+    return
 }
 
 # --- Build the virtual disk ---------------------------------------------------
@@ -746,43 +1803,11 @@ finally {
     }
 }
 
-# --- Network switch -----------------------------------------------------------
-# Made only now, after every check and the disk build have passed, so a wrong ISO
-# or a full disk never changes this PC's networking.
-if ($createSwitchOn) {
-    Step "Setting up network access: creating the Hyper-V switch $SwitchName on $($createSwitchOn.Name)."
-    Say "This PC's network connection drops for a few seconds while Windows sets it up."
-    try {
-        New-VMSwitch -Name $SwitchName -NetAdapterName $createSwitchOn.Name -AllowManagementOS $true -ErrorAction Stop | Out-Null
-    } catch {
-        # Leave nothing that would block a second run: the disk goes too.
-        Remove-Item -LiteralPath $vhdPath -Force -ErrorAction SilentlyContinue
-        throw "Couldn't create the switch $SwitchName on $($createSwitchOn.Name): $($_.Exception.Message) If this PC has lost its network connection, remove what was made with: Remove-VMSwitch -Name '$SwitchName' -Force. Then run the script again, or add -HostOnly to keep the VM on this PC only."
-    }
-    # Wait for this PC's own connection to come back, now through the switch.
-    $netDeadline = (Get-Date).AddSeconds(90)
-    while (-not (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias "vEthernet ($SwitchName)" -ErrorAction SilentlyContinue) -and (Get-Date) -lt $netDeadline) {
-        Start-Sleep -Seconds 3
-    }
-    if (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias "vEthernet ($SwitchName)" -ErrorAction SilentlyContinue) {
-        Say 'The switch is ready and this PC is back on the network.'
-    } else {
-        Say "This PC hasn't got its network connection back through the switch yet. The VM is being set up anyway."
-        Say "If the connection doesn't return, remove the switch with: Remove-VMSwitch -Name '$SwitchName' -Force"
-    }
-}
+Add-NetworkSwitch @($vhdPath)
 
 # --- Create and start the VM --------------------------------------------------
 Step 'Step 4 of 5: Creating the virtual machine and starting it.'
-New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ([int64]$MemoryGB * 1GB) -VHDPath $vhdPath -SwitchName $SwitchName | Out-Null
-Set-VMProcessor -VMName $VMName -Count $ProcessorCount
-Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes 2GB -StartupBytes ([int64]$MemoryGB * 1GB) -MaximumBytes ([int64][Math]::Max($MemoryGB * 2, 8) * 1GB)
-Set-VM -Name $VMName -AutomaticCheckpointsEnabled $false
-if (-not $NoAutoStart) {
-    # Start with this PC every time, not only when it was running at shutdown,
-    # so turning the PC on is all it takes to be able to connect.
-    Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 0
-}
+New-BaseVM
 Set-VMFirmware -VMName $VMName -FirstBootDevice (Get-VMHardDiskDrive -VMName $VMName)
 try {
     # A virtual TPM keeps Windows 11 happy for future feature updates.
@@ -855,78 +1880,4 @@ while (-not ($guest -and $guest.Ready -and $guest.IPAddress)) {
 }
 Say "Windows is set up. The virtual machine's address is $($guest.IPAddress)."
 
-# Connect by name where one points at the VM, since its address can change: the
-# Default Switch hands out a new one when this PC restarts, and a router can too.
-# The Default Switch publishes <computer>.mshome.net, visible only to this PC.
-# On your own network the VM answers to <computer>.local, which other Windows
-# PCs and Macs can look up too; it can take a little while to start answering.
-$names = if ($SwitchName -eq 'Default Switch') { @("$ComputerName.mshome.net") } else { @("$ComputerName.local", $ComputerName) }
-$target = $guest.IPAddress
-$nameDeadline = (Get-Date).AddSeconds(60)
-do {
-    foreach ($name in $names) {
-        try {
-            # Only a name that means this VM alone. Another computer with the same
-            # name on the network answers too, and Remote Desktop could pick it.
-            $resolved = @([Net.Dns]::GetHostAddresses($name) |
-                Where-Object AddressFamily -eq 'InterNetwork' | ForEach-Object IPAddressToString)
-            if ($resolved.Count -gt 0 -and -not ($resolved | Where-Object { $_ -ne $guest.IPAddress })) { $target = $name; break }
-        } catch { }
-    }
-    if ($target -ne $guest.IPAddress) { break }
-    Start-Sleep -Seconds 5
-} while ((Get-Date) -lt $nameDeadline)
-
-function Test-RdpPort([string]$HostName) {
-    $client = New-Object Net.Sockets.TcpClient
-    try { return $client.ConnectAsync($HostName, 3389).Wait(3000) -and $client.Connected }
-    catch { return $false }
-    finally { $client.Dispose() }
-}
-$rdpDeadline = (Get-Date).AddMinutes(5)
-while (-not (Test-RdpPort $target)) {
-    if ((Get-Date) -gt $rdpDeadline) {
-        throw "Windows is set up, but Remote Desktop isn't answering at $target. Try restarting the VM in Hyper-V Manager, then connect to $target."
-    }
-    Start-Sleep -Seconds 5
-}
-Say 'Remote Desktop is answering.'
-
-# --- Connection file and saved sign-in ----------------------------------------
-# audiomode 0 plays the VM's sound on this PC; audiocapturemode 1 sends this
-# PC's microphone to the VM. Authentication level 0 skips the certificate
-# warning that a brand-new VM's self-signed certificate would otherwise raise.
-$rdp = @(
-    "full address:s:$target"
-    "username:s:$ComputerName\$UserName"
-    'prompt for credentials:i:0'
-    'authentication level:i:0'
-    'audiomode:i:0'
-    'audiocapturemode:i:1'
-    'redirectclipboard:i:1'
-    'autoreconnection enabled:i:1'
-    'screen mode id:i:2'
-)
-Set-Content -LiteralPath $rdpFile -Value $rdp -Encoding ASCII
-cmdkey /generic:"TERMSRV/$target" /user:"$ComputerName\$UserName" /pass:"$Password" | Out-Null
-
-Write-Host ''
-Say 'All done.'
-Say "Virtual machine: $VMName"
-Say "Connect to: $target"
-if ((Get-VMSwitch -Name $SwitchName).SwitchType -eq 'External') {
-    Say 'Other computers on your network can connect to that address too.'
-}
-if (-not $NoAutoStart) {
-    Say 'The virtual machine starts whenever this PC starts.'
-}
-Say "User name: $UserName"
-Say "Password: $Password"
-Say "Connection file: $rdpFile"
-Say 'The sign-in is saved, so opening the connection file signs you in without typing the password.'
-Say 'Remote Desktop still asks each time whether to allow sound, the microphone and the clipboard. Choose Connect.'
-
-if (-not $NoConnect) {
-    Say 'Opening Remote Desktop now.'
-    Start-Process -FilePath mstsc.exe -ArgumentList "`"$rdpFile`""
-}
+Complete-Connection $guest.IPAddress
