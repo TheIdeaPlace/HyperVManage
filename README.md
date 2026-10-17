@@ -112,6 +112,8 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
     Ubuntu does, with no screen of its own, and Remote Desktop goes straight to it: no second
     sign-in, Orca already talking, and its speech playing on this PC. Connect with Remote Desktop
     and Save Connection File work as they do for Windows, and the saved sign-in is the same.
+    [Connecting to Linux with Windows' Remote Desktop](docs/remote-desktop-to-linux.md) explains
+    how this works in general, for any Linux machine.
   - **The console** (Open Console) shows only Ubuntu's sign-in screen, and has no sound.
     Screenshot shows that screen too, without asking for a sign-in: the session picture is
     Windows' own, so for a VM that says it runs something else, the VM's own screen is what
