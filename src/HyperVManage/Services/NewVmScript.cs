@@ -263,6 +263,7 @@ public static class NewVmScript
 
         var psi = new ProcessStartInfo(SystemTools.PowerShell)
         {
+            WorkingDirectory = SystemTools.WorkingFolder,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
