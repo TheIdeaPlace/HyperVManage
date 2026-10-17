@@ -18,6 +18,15 @@ public static class SystemTools
     public static string RemoteDesktop { get; } = Path.Combine(Environment.SystemDirectory, "mstsc.exe");
     public static string Console { get; } = Path.Combine(Environment.SystemDirectory, "vmconnect.exe");
     public static string CredentialManager { get; } = Path.Combine(Environment.SystemDirectory, "cmdkey.exe");
+
+    /// <summary>
+    /// Where PowerShell starts, rather than the app's own folder, which it would otherwise inherit.
+    /// Add-Type's compiler looks for assemblies in the current folder first, and the installed
+    /// app's folder holds .NET's own System.Core.dll and the like: compiled against those, a
+    /// script's C# fails, and, run as administrator, would load whatever a program running as the
+    /// user had put in that folder, which the user can write to.
+    /// </summary>
+    public static string WorkingFolder => Environment.SystemDirectory;
 }
 
 /// <summary>
@@ -49,6 +58,7 @@ public static class PowerShellRunner
 
         var psi = new ProcessStartInfo(SystemTools.PowerShell)
         {
+            WorkingDirectory = SystemTools.WorkingFolder,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,

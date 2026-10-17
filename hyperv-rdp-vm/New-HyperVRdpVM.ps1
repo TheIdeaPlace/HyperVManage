@@ -817,8 +817,10 @@ public static class NewVmSeedDisk {
     }
 
     // The short name only has to be unique in its folder, since every name has a long one too.
+    // A Dictionary rather than a HashSet: the HashSet is in System.Core, which Add-Type doesn't
+    // always reference, where this compiles against mscorlib alone.
     static void AssignShortNames(List<Node> children) {
-        HashSet<string> used = new HashSet<string>();
+        Dictionary<string, bool> used = new Dictionary<string, bool>();
         foreach (Node c in children) {
             string upper = c.Name.ToUpperInvariant();
             int dot = upper.LastIndexOf('.');
@@ -826,15 +828,15 @@ public static class NewVmSeedDisk {
             string ext = Clean(dot > 0 ? upper.Substring(dot + 1) : "");
             if (ext.Length > 3) ext = ext.Substring(0, 3);
             string candidate = stem.Length > 8 ? null : stem;
-            if (candidate == null || candidate.Length == 0 || used.Contains(candidate + "." + ext)) {
+            if (candidate == null || candidate.Length == 0 || used.ContainsKey(candidate + "." + ext)) {
                 for (int i = 1; ; i++) {
                     string tail = "~" + i;
                     string s = stem.Length + tail.Length > 8 ? stem.Substring(0, Math.Max(0, 8 - tail.Length)) : stem;
                     candidate = s + tail;
-                    if (!used.Contains(candidate + "." + ext)) break;
+                    if (!used.ContainsKey(candidate + "." + ext)) break;
                 }
             }
-            used.Add(candidate + "." + ext);
+            used[candidate + "." + ext] = true;
             byte[] sn = new byte[11];
             for (int i = 0; i < 11; i++) sn[i] = 0x20;
             Encoding.ASCII.GetBytes(candidate).CopyTo(sn, 0);

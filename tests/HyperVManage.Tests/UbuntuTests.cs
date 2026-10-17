@@ -23,7 +23,7 @@ public class UbuntuBuildTests
     internal static Task<string> RunPsForTests(string script) => RunPs(script);
 
     /// <summary>Runs PowerShell text in Windows PowerShell 5.1, as the build does, and returns what it printed.</summary>
-    private static async Task<string> RunPs(string script)
+    private static async Task<string> RunPs(string script, string? workingDirectory = null)
     {
         var path = Path.Combine(Path.GetTempPath(), $"hvm-test-{Guid.NewGuid():N}.ps1");
         // With a byte order mark, so Windows PowerShell reads it as UTF-8.
@@ -36,6 +36,7 @@ public class UbuntuBuildTests
                 RedirectStandardOutput = true, RedirectStandardError = true,
                 StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
             };
+            if (workingDirectory is not null) psi.WorkingDirectory = workingDirectory;
             foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path }) psi.ArgumentList.Add(a);
             using var p = System.Diagnostics.Process.Start(psi)!;
             var output = p.StandardOutput.ReadToEndAsync(Ct);
@@ -324,6 +325,33 @@ public class UbuntuBuildTests
             "$6$rounds=77777$short$WuQyW2YR.hBNpjjRhpYD/ifIw05xdfeEyQoMxIXbkvr0gge1a1x3yRULJ5CCaUeOxFmtlcGZelFl5CxtgfiAc0",
             "16 True",
         ], result.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    [Fact]
+    public async Task TheHelpers_Compile_EvenWhereTheCurrentFolderHoldsDotNetsOwnAssemblies()
+    {
+        // The installed app's folder holds .NET's System.Core.dll, in which HashSet is only a
+        // forward; Add-Type's compiler looks in the current folder first, and failed there.
+        // .NET's own runtime folder holds the same files.
+        var runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
+        Assert.True(File.Exists(Path.Combine(runtime, "System.Core.dll")));
+        var said = await RunPs(CompileHelpers() + "'compiled'", runtime);
+        Assert.Contains("compiled", said);
+    }
+
+    [Fact]
+    public async Task EveryPowerShellTheAppStarts_StartsInSystem32_NotTheAppsFolder()
+    {
+        var runner = (await PowerShellRunner.RunAsync("(Get-Location).Path", Ct)).Trim();
+        Assert.Equal(Environment.SystemDirectory, runner, ignoreCase: true);
+
+        var lines = new List<string>();
+        using var p = await NewVmScript.StartWithScriptAsync("Write-Host \"at=$((Get-Location).Path)\"",
+            pipe => NewVmScript.ReadScriptFromPipe(pipe) + "& ([scriptblock]::Create($scriptText))",
+            l => { lock (lines) lines.Add(l); }, allowCurrentUser: true, ct: Ct);
+        await p.WaitForExitAsync(Ct);
+        p.WaitForExit();
+        Assert.Contains(lines, l => l.Equals("at=" + Environment.SystemDirectory, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
