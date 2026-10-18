@@ -1,9 +1,6 @@
 # Hyper-V Manage
 
-> **Status: pre-release.** On 2 October 2026 it built Windows VMs
-> end to end on an Arm64 PC and an x64 PC, connected to them with Remote Desktop, opened the
-> console, and paused one. Settings, Checkpoint, Apply Checkpoint, Clone and Delete have so far been exercised only
-> against the pretend VMs of demo mode. See [Testing it on a real machine](#testing-it-on-a-real-machine).
+> **Status: pre-release**, in use on real Hyper-V on Arm64 and x64 PCs.
 
 A Windows app for managing Hyper-V virtual machines, built screen reader first. It is the
 Windows counterpart of [Parallels Manager](https://github.com/kellylford/TheWorkBench/tree/main/parallels-manager), and it builds new Windows
@@ -397,18 +394,8 @@ tests/HyperVManage.Tests/
 
 ## Testing it on a real machine
 
-Done so far, on 2 October 2026: building a VM with New Virtual Machine on an Arm64 PC and on an
-x64 PC, each on "Your network"; Connect with Remote Desktop; Open Console; Pause.
-
-On 16 October 2026, on the Arm64 PC, `New-HyperVRdpVM.ps1 -Ubuntu` built Ubuntu VMs end to end
-on "Your network". Ubuntu's installer ran with no questions, Hyper-V reported the address,
-Restart and Shut Down worked through Hyper-V, and the desktop session came back after signing
-out. A Remote Desktop client (FreeRDP, inside the VM) went straight to the desktop with no
-second sign-in, and was sent sound when Orca spoke, when speech-dispatcher spoke and when Ubuntu
-played a sound, and none in silence. A wrong password was refused. Not yet run: the app's own
-New Ubuntu Virtual Machine window on a real build, an x64 PC, and the Default Switch.
-
-Still to do, on a PC with Hyper-V:
+What to check on a PC with Hyper-V after a change to how the app works with it; demo mode and
+the tests can't show these:
 
 1. Confirm the list matches `Get-VM`.
 2. Start, Shut Down, Save and Resume a test VM, and Turn Off one that is running.
@@ -421,8 +408,8 @@ Still to do, on a PC with Hyper-V:
    with the VM running, paused and saved, and with the keep-it-first box checked and unchecked.
    Clone it, then Delete the clone and confirm its folder and disk are gone.
 7. Connect to a VM from another computer on the network.
-8. Build an Ubuntu VM on an x64 PC. On both kinds, connect with Windows' own Remote Desktop
-   and listen for Orca with JAWS and with NVDA running on this PC.
+8. Build an Ubuntu VM, on an Arm64 PC and on an x64 PC. Connect with Windows' own Remote
+   Desktop and listen for Orca, with JAWS and with NVDA running on this PC.
 9. Screenshot a running VM at its sign-in screen and at the desktop, a paused one, and one
    whose display has gone to sleep (it should say blank). Have JAWS Picture Smart and NVDA
    describe the picture, paste it into a web page, and save it. Then the same over Remote
