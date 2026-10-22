@@ -61,7 +61,7 @@ public partial class MainWindow : Window
         vm.RequestCheckpointRename = AskCheckpointRename;
         vm.ConfirmDeleteCheckpoints = (v, going, withLater) => ConfirmWindow.Ask(this,
             MainViewModel.DeleteCheckpointsQuestion(v, going, withLater),
-            going.Count == 1 ? "Delete checkpoint" : "Delete checkpoints");
+            going.Count == 1 ? "Delete checkpoint" : "Delete checkpoints", warning: true);
         vm.CheckpointSelectionReplaced += () =>
         {
             if (IsActive && (CheckpointList.IsKeyboardFocusWithin || Keyboard.FocusedElement is null || ReferenceEquals(Keyboard.FocusedElement, this)))
@@ -258,7 +258,7 @@ public partial class MainWindow : Window
             $"Only the name changes. {vm.Name} and what the checkpoint kept stay as they are.");
 
     private bool AskDelete(VmInfo vm, IReadOnlyList<string> disks) =>
-        ConfirmWindow.Ask(this, DeleteVmQuestion(vm, disks), "Delete virtual machine");
+        ConfirmWindow.Ask(this, DeleteVmQuestion(vm, disks), "Delete virtual machine", warning: true);
 
     /// <summary>
     /// Only what will happen to this VM. A disk another VM turns out to rely on is kept, and the

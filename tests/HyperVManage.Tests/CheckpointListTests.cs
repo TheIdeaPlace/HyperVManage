@@ -636,7 +636,7 @@ public class CheckpointWindowTests
     private static ConfirmWindow ShowConfirm(bool yesFirst = false)
     {
         TestApp.Ensure();
-        var w = ConfirmWindow.Create("Delete Test2?\n\nThis can't be undone.", "Delete virtual machine", yesFirst);
+        var w = ConfirmWindow.Create("Delete Test2?\n\nThis can't be undone.", "Delete virtual machine", yesFirst, warning: !yesFirst);
         w.ShowActivated = false;
         w.WindowStartupLocation = WindowStartupLocation.Manual;
         w.Left = w.Top = -10000;
@@ -660,9 +660,12 @@ public class CheckpointWindowTests
             Assert.Equal("Delete virtual machine", w.Title);
             Assert.Equal("Delete Test2?\n\nThis can't be undone.", UIElementAutomationPeer.CreatePeerForElement(no).GetHelpText());
             Assert.Equal("", AutomationProperties.GetHelpText(yes));
-            var text = (TextBox)w.FindName("QuestionText");
-            Assert.True(text.IsReadOnly);
-            Assert.True(text.Focusable);
+            // Plain text, as a message box's is, which screen readers read as the dialog opens.
+            var text = (TextBlock)w.FindName("QuestionText");
+            Assert.Equal("Delete Test2?\n\nThis can't be undone.", text.Text);
+            var icon = (Image)w.FindName("WarningIcon");
+            Assert.Equal(Visibility.Visible, icon.Visibility);
+            Assert.NotNull(icon.Source);
         }
         finally { w.Close(); }
     }
@@ -677,25 +680,48 @@ public class CheckpointWindowTests
             Assert.True(yes.IsKeyboardFocused);
             Assert.True(yes.IsDefault);
             Assert.True(((Button)w.FindName("NoButton")).IsCancel);
+            Assert.Equal(Visibility.Collapsed, ((Image)w.FindName("WarningIcon")).Visibility);
         }
         finally { w.Close(); }
+    }
+
+    /// <summary>Shows the window as a dialog, does something to it once it's up, and returns its
+    /// answer. Closes it after five seconds rather than hang, and fails if it had to.</summary>
+    private static bool? Answer(Action<ConfirmWindow> act)
+    {
+        TestApp.Ensure();
+        var w = ConfirmWindow.Create("Delete Test2?", "Delete virtual machine");
+        w.ShowActivated = false;
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.Left = w.Top = -10000;
+        var timedOut = false;
+        var guard = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        guard.Tick += (_, _) => { guard.Stop(); timedOut = true; w.Close(); };
+        w.Loaded += (_, _) => { guard.Start(); w.Dispatcher.BeginInvoke(() => act(w), DispatcherPriority.Input); };
+        var answer = w.ShowDialog();
+        guard.Stop();
+        Assert.False(timedOut, "the window didn't close");
+        return answer;
+    }
+
+    [StaFact]
+    public void ConfirmWindow_Yes_AnswersYes_AndClosingIt_AnswersNo()
+    {
+        Assert.True(Answer(w => ((Button)w.FindName("YesButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent))));
+        Assert.NotEqual(true, Answer(w => w.Close()));
     }
 
     [StaFact(Skip = InputTests.SkipReason, SkipUnless = nameof(InputTests.Enabled), SkipType = typeof(InputTests))]
     public void ConfirmWindow_Escape_AnswersNo()
     {
-        TestApp.Ensure();
-        var w = ConfirmWindow.Create("Delete Test2?", "Delete virtual machine");
-        bool? answer = null;
-        w.Loaded += (_, _) => w.Dispatcher.BeginInvoke(() =>
+        var answer = Answer(w =>
         {
             w.Activate();
             var source = PresentationSource.FromVisual(w)!;
             System.Windows.Input.InputManager.Current.ProcessInput(new System.Windows.Input.KeyEventArgs(
                 System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Escape)
             { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent });
-        }, DispatcherPriority.Input);
-        answer = w.ShowDialog();
+        });
         Assert.NotEqual(true, answer);
     }
 

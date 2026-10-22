@@ -249,7 +249,7 @@ public partial class NewVmWindow : Window
                 "The virtual machine is still being built. Stop the build?\n\n" +
                 "Whatever it has made so far is cleaned up. If it has already got as far as creating the VM, " +
                 "that VM is left in the list for you to delete.",
-                "Stop building the VM?");
+                "Stop building the VM?", warning: true);
             if (!stop) return;
             if (!_vm.IsRunning)
             {
