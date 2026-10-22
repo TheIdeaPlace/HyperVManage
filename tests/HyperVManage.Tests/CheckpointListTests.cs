@@ -633,6 +633,72 @@ public class CheckpointWindowTests
         finally { window.Close(); }
     }
 
+    private static ConfirmWindow ShowConfirm(bool yesFirst = false)
+    {
+        TestApp.Ensure();
+        var w = ConfirmWindow.Create("Delete Test2?\n\nThis can't be undone.", "Delete virtual machine", yesFirst);
+        w.ShowActivated = false;
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.Left = w.Top = -10000;
+        w.Show();
+        Pump();
+        return w;
+    }
+
+    [StaFact]
+    public void ConfirmWindow_StartsOnNo_WhichEscapeAndEnterAnswer_AndSpeaksTheQuestion()
+    {
+        var w = ShowConfirm();
+        try
+        {
+            var no = (Button)w.FindName("NoButton");
+            var yes = (Button)w.FindName("YesButton");
+            Assert.True(no.IsKeyboardFocused);
+            Assert.True(no.IsCancel);   // Escape, and the close button, answer No
+            Assert.True(no.IsDefault);  // and so does Enter
+            Assert.False(yes.IsDefault);
+            Assert.Equal("Delete virtual machine", w.Title);
+            Assert.Equal("Delete Test2?\n\nThis can't be undone.", UIElementAutomationPeer.CreatePeerForElement(no).GetHelpText());
+            Assert.Equal("", AutomationProperties.GetHelpText(yes));
+            var text = (TextBox)w.FindName("QuestionText");
+            Assert.True(text.IsReadOnly);
+            Assert.True(text.Focusable);
+        }
+        finally { w.Close(); }
+    }
+
+    [StaFact]
+    public void ConfirmWindow_ForAQuestionWhoseUsualAnswerIsYes_StartsOnYes()
+    {
+        var w = ShowConfirm(yesFirst: true);
+        try
+        {
+            var yes = (Button)w.FindName("YesButton");
+            Assert.True(yes.IsKeyboardFocused);
+            Assert.True(yes.IsDefault);
+            Assert.True(((Button)w.FindName("NoButton")).IsCancel);
+        }
+        finally { w.Close(); }
+    }
+
+    [StaFact(Skip = InputTests.SkipReason, SkipUnless = nameof(InputTests.Enabled), SkipType = typeof(InputTests))]
+    public void ConfirmWindow_Escape_AnswersNo()
+    {
+        TestApp.Ensure();
+        var w = ConfirmWindow.Create("Delete Test2?", "Delete virtual machine");
+        bool? answer = null;
+        w.Loaded += (_, _) => w.Dispatcher.BeginInvoke(() =>
+        {
+            w.Activate();
+            var source = PresentationSource.FromVisual(w)!;
+            System.Windows.Input.InputManager.Current.ProcessInput(new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Escape)
+            { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent });
+        }, DispatcherPriority.Input);
+        answer = w.ShowDialog();
+        Assert.NotEqual(true, answer);
+    }
+
     [StaFact]
     public void ApplyCheckpointWindow_StartsOnTheOneChosenInTheList()
     {
