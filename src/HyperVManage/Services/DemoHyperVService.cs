@@ -23,8 +23,12 @@ public sealed class DemoHyperVService : IHyperVService
 
     public DemoHyperVService()
     {
-        // One VM with a checkpoint, so Apply Checkpoint has something to show.
+        // One VM with a checkpoint, so Apply Checkpoint has something to show, and one with a
+        // few, one after another, so the checkpoint list has older ones to delete.
         AddCheckpoint(_vms[1], "Clean install");
+        AddCheckpoint(_vms[2], "Fresh agent", DateTime.Now.AddDays(-40));
+        AddCheckpoint(_vms[2], "Tools installed", DateTime.Now.AddDays(-21));
+        AddCheckpoint(_vms[2], "Before the October update", DateTime.Now.AddDays(-2));
     }
 
     /// <summary>How long each pretend operation takes. Zero in tests.</summary>
@@ -100,11 +104,12 @@ public sealed class DemoHyperVService : IHyperVService
         lock (_gate) AddCheckpoint(Find(vmId), checkpointName);
     }
 
-    private void AddCheckpoint(VmInfo vm, string name)
+    private void AddCheckpoint(VmInfo vm, string name, DateTime? created = null)
     {
         if (!_checkpoints.TryGetValue(vm.Id, out var list)) _checkpoints[vm.Id] = list = [];
         var id = Guid.NewGuid().ToString();
-        list.Add((new CheckpointInfo(id, name, DateTime.Now, false), vm.State));
+        // Taken after the one the VM is now based on, as Hyper-V does.
+        list.Add((new CheckpointInfo(id, name, created ?? DateTime.Now, false, _currentCheckpoint.GetValueOrDefault(vm.Id) ?? ""), vm.State));
         _currentCheckpoint[vm.Id] = id;
         vm.CheckpointCount = list.Count;
     }
@@ -136,6 +141,54 @@ public sealed class DemoHyperVService : IHyperVService
             vm.IpAddresses = [];
             vm.MemoryAssignedMB = 0;
             _currentCheckpoint[vmId] = checkpointId;
+        }
+    }
+
+    public async Task DeleteCheckpointsAsync(string vmId, IReadOnlyList<string> checkpointIds, bool includeLater, CancellationToken ct = default)
+    {
+        await Task.Delay(Delay, ct);
+        lock (_gate)
+        {
+            var vm = Find(vmId);
+            var list = _checkpoints.GetValueOrDefault(vmId) ?? [];
+            if (checkpointIds.Any(id => list.All(c => c.Info.Id != id)))
+                throw new HyperVException("A checkpoint you chose no longer exists, so none were deleted.");
+            if (includeLater && !Later(list, checkpointIds[0]).ToHashSet().SetEquals(checkpointIds.Skip(1)))
+                throw new HyperVException("The checkpoints after it have changed since the list was read, so none were deleted. Press F5 and try again.");
+            // With later ones, the first takes the rest with it.
+            foreach (var id in includeLater ? checkpointIds.Take(1) : checkpointIds)
+            {
+                var gone = list.Single(c => c.Info.Id == id);
+                var parent = gone.Info.ParentId;
+                var going = includeLater ? Later(list, id).Append(id).ToHashSet() : [id];
+                // What came after takes its place, as Hyper-V merges it into them.
+                for (var i = 0; i < list.Count; i++)
+                    if (list[i].Info.ParentId == id) list[i] = list[i] with { Info = list[i].Info with { ParentId = parent } };
+                list.RemoveAll(c => going.Contains(c.Info.Id));
+                if (_currentCheckpoint.GetValueOrDefault(vmId) is { } current && going.Contains(current))
+                {
+                    if (parent.Length > 0) _currentCheckpoint[vmId] = parent;
+                    else _currentCheckpoint.Remove(vmId);
+                }
+            }
+            vm.CheckpointCount = list.Count;
+        }
+    }
+
+    /// <summary>Every checkpoint taken after this one, at any depth.</summary>
+    private static IEnumerable<string> Later(List<(CheckpointInfo Info, string State)> list, string id) =>
+        list.Where(c => c.Info.ParentId == id).SelectMany(c => Later(list, c.Info.Id).Prepend(c.Info.Id)).ToList();
+
+    public async Task RenameCheckpointAsync(string vmId, string checkpointId, string newName, CancellationToken ct = default)
+    {
+        await Task.Delay(Delay, ct);
+        lock (_gate)
+        {
+            Find(vmId);
+            var list = _checkpoints.GetValueOrDefault(vmId) ?? [];
+            var i = list.FindIndex(c => c.Info.Id == checkpointId);
+            if (i < 0) throw new HyperVException("That checkpoint no longer exists.");
+            list[i] = list[i] with { Info = list[i].Info with { Name = newName } };
         }
     }
 

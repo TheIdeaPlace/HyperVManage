@@ -13,16 +13,17 @@ public partial class ApplyCheckpointWindow : Window
 {
     private ApplyCheckpointWindow() => InitializeComponent();
 
-    public static CheckpointChoice? Ask(Window owner, VmInfo vm, IReadOnlyList<CheckpointInfo> checkpoints)
+    /// <param name="chosen">The one to start on, as chosen in the checkpoint list; otherwise the newest.</param>
+    public static CheckpointChoice? Ask(Window owner, VmInfo vm, IReadOnlyList<CheckpointInfo> checkpoints, CheckpointInfo? chosen = null)
     {
-        var w = Create(vm, checkpoints);
+        var w = Create(vm, checkpoints, chosen);
         w.Owner = owner;
-        return w.ShowDialog() == true && w.CheckpointList.SelectedItem is CheckpointInfo chosen
-            ? new CheckpointChoice(chosen, w.SaveFirstBox.IsChecked == true)
+        return w.ShowDialog() == true && w.CheckpointList.SelectedItem is CheckpointInfo applied
+            ? new CheckpointChoice(applied, w.SaveFirstBox.IsChecked == true)
             : null;
     }
 
-    internal static ApplyCheckpointWindow Create(VmInfo vm, IReadOnlyList<CheckpointInfo> checkpoints)
+    internal static ApplyCheckpointWindow Create(VmInfo vm, IReadOnlyList<CheckpointInfo> checkpoints, CheckpointInfo? chosen = null)
     {
         var w = new ApplyCheckpointWindow { Title = $"Apply a checkpoint to {vm.Name}" };
         w.NoteText.Text = Note(vm);
@@ -35,11 +36,13 @@ public partial class ApplyCheckpointWindow : Window
         item.Setters.Add(new EventSetter(MouseDoubleClickEvent, new MouseButtonEventHandler(w.Item_MouseDoubleClick)));
         w.CheckpointList.ItemContainerStyle = item;
         w.CheckpointList.ItemsSource = checkpoints;
-        w.CheckpointList.SelectedIndex = 0;
+        var start = chosen is null ? 0 : Math.Max(0, checkpoints.ToList().FindIndex(c => c.Id == chosen.Id));
+        w.CheckpointList.SelectedIndex = start;
         w.Loaded += (_, _) =>
         {
+            w.CheckpointList.ScrollIntoView(w.CheckpointList.SelectedItem);
             w.CheckpointList.UpdateLayout();
-            if (w.CheckpointList.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem first) first.Focus();
+            if (w.CheckpointList.ItemContainerGenerator.ContainerFromIndex(start) is ListBoxItem row) row.Focus();
             else w.CheckpointList.Focus();
         };
         return w;

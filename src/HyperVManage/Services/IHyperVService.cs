@@ -37,8 +37,8 @@ public sealed record VmSettings(
 
 /// <summary>One of a VM's checkpoints. ToString is what the Apply Checkpoint list shows and
 /// speaks, with the date in the user's own format. IsCurrent marks the one the VM is running on from, which Hyper-V Manager shows as
-/// "Now" under it.</summary>
-public sealed record CheckpointInfo(string Id, string Name, DateTime Created, bool IsCurrent)
+/// "Now" under it. ParentId is the checkpoint this one was taken after, or empty for the first.</summary>
+public sealed record CheckpointInfo(string Id, string Name, DateTime Created, bool IsCurrent, string ParentId = "")
 {
     public override string ToString() =>
         $"{Name}, taken {Created:f}" + (IsCurrent ? ", the one the VM is now based on" : "");
@@ -65,6 +65,14 @@ public interface IHyperVService
     /// is turned off first. With saveCurrentAs, how it is now is first kept as a checkpoint of
     /// that name.</summary>
     Task ApplyCheckpointAsync(string vmId, string checkpointId, string? saveCurrentAs, CancellationToken ct = default);
+
+    /// <summary>Deletes checkpoints. The VM itself doesn't change: what each one kept is merged
+    /// into what came after it. With includeLater, the first checkpoint given goes with every
+    /// checkpoint taken after it, and the rest given are those; if Hyper-V now has others after
+    /// it, nothing is deleted. Nothing is deleted if any of them no longer exists.</summary>
+    Task DeleteCheckpointsAsync(string vmId, IReadOnlyList<string> checkpointIds, bool includeLater, CancellationToken ct = default);
+
+    Task RenameCheckpointAsync(string vmId, string checkpointId, string newName, CancellationToken ct = default);
     Task CloneAsync(string vmId, string newName, CancellationToken ct = default);
 
     /// <summary>The disk files attached to a VM, for the Delete confirmation to name.</summary>

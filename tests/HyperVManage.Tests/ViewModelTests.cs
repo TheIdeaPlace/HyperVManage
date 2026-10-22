@@ -208,7 +208,7 @@ public class MainViewModelTests
         Assert.Equal("Running", test2.State);
 
         IReadOnlyList<CheckpointInfo>? offered = null;
-        vm.RequestCheckpointToApply = (_, list) => { offered = list; return null; };
+        vm.RequestCheckpointToApply = (_, list, _) => { offered = list; return null; };
         await vm.ApplyCheckpointCommand.ExecuteAsync(null);
         Assert.Equal("Running", test2.State);
         Assert.Equal("Clean install", Assert.Single(offered!).Name);
@@ -216,7 +216,7 @@ public class MainViewModelTests
 
         var said = new List<string>();
         vm.Announce += said.Add;
-        vm.RequestCheckpointToApply = (_, list) => new CheckpointChoice(list[0], SaveCurrentFirst: true);
+        vm.RequestCheckpointToApply = (_, list, _) => new CheckpointChoice(list[0], SaveCurrentFirst: true);
         await vm.ApplyCheckpointCommand.ExecuteAsync(null);
 
         // Taken while off, so it comes back off; how it was is now the newest checkpoint.
@@ -239,7 +239,7 @@ public class MainViewModelTests
 
         var said = new List<string>();
         vm.Announce += said.Add;
-        vm.RequestCheckpointToApply = (_, list) => new CheckpointChoice(list[0], SaveCurrentFirst: true);
+        vm.RequestCheckpointToApply = (_, list, _) => new CheckpointChoice(list[0], SaveCurrentFirst: true);
         await vm.ApplyCheckpointCommand.ExecuteAsync(null);
 
         Assert.NotEqual("Running", running.State);
@@ -255,7 +255,7 @@ public class MainViewModelTests
         vm.Selected = vm.Vms.Single(v => v.Name == "Win11-RDP");
         vm.Selected.CheckpointCount = 1; // the list's count is up to ten seconds old
         var asked = false;
-        vm.RequestCheckpointToApply = (_, _) => { asked = true; return null; };
+        vm.RequestCheckpointToApply = (_, _, _) => { asked = true; return null; };
         var said = new List<string>();
         vm.Announce += said.Add;
 
@@ -274,7 +274,7 @@ public class MainViewModelTests
         var said = new List<string>();
         vm.Announce += said.Add;
         // A checkpoint deleted while the window was open.
-        vm.RequestCheckpointToApply = (_, list) => new CheckpointChoice(list[0] with { Id = "gone" }, SaveCurrentFirst: true);
+        vm.RequestCheckpointToApply = (_, list, _) => new CheckpointChoice(list[0] with { Id = "gone" }, SaveCurrentFirst: true);
 
         await vm.ApplyCheckpointCommand.ExecuteAsync(null);
 
@@ -297,7 +297,7 @@ public class MainViewModelTests
         await vm.RefreshAsync();
         var test2 = vm.Vms.Single(v => v.Name == "Test2");
         vm.Selected = test2;
-        vm.RequestCheckpointToApply = (_, list) => new CheckpointChoice(list[0], SaveCurrentFirst: false);
+        vm.RequestCheckpointToApply = (_, list, _) => new CheckpointChoice(list[0], SaveCurrentFirst: false);
         await vm.ApplyCheckpointCommand.ExecuteAsync(null);
         Assert.Equal(1, test2.CheckpointCount);
     }

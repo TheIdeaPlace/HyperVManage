@@ -61,6 +61,14 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
   and keeps the current values readable. If no switch reaches your own network, it offers to
   create one.
 - **Checkpoint, Apply Checkpoint, Clone, Delete.**
+  - Under the list of VMs, and next to it in Tab order, is the selected VM's list of checkpoints,
+    newest first, each with when it was taken and whether it's the one the VM is now based on.
+    There, Enter applies a checkpoint, F2 renames it and Delete deletes it, each asking first;
+    the Checkpoints menu (Alt+C) and the list's context menu have the same. Choose several with
+    Shift or Ctrl and the arrow keys, and Delete deletes them all with one question. Deleting a
+    checkpoint doesn't change the VM: Hyper-V merges what it kept into what came after it.
+    **Delete Checkpoint and Those After It** (Shift+Delete) also deletes every checkpoint taken
+    after it, and the question lists them.
   - Apply Checkpoint lists the VM's checkpoints, newest first, each with when it was taken, and
     puts the VM back to the one you choose. A running or paused VM is turned off first. Unless
     you uncheck it, how the VM is now is kept as a checkpoint first, so nothing is lost for good.
@@ -80,8 +88,11 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
   has been moved or deleted isn't offered. Demo mode remembers them only until it closes.
 - **Windows ISO downloads**: New Windows Virtual Machine has links, under the ISO field, to Microsoft's
   Windows 11 download pages, with the page for this PC's kind of processor first (Hyper-V only
-  runs Windows built for it) and the other kind's second. The Help menu has the same two. They
-  open in your browser as you, not as administrator.
+  runs Windows built for it) and the other kind's second. The Help menu has the same two, and
+  then Ubuntu's download folder for this PC's processor, where New Ubuntu Virtual Machine gets its
+  ISO. That build downloads Ubuntu itself, but uses the newest desktop ISO from your Downloads
+  folder when it's there under the name it downloaded with and matches Ubuntu's checksum. They open in your browser as you, not as
+  administrator.
 - **New Windows Virtual Machine** (Ctrl+N): the script's options in a form, with a name that
   starts with this PC's name (for example `SURFACEPRO7-Win11`) so VMs made on different PCs never
   share one. Then
@@ -184,6 +195,19 @@ In the list of virtual machines:
 | Enter | Connect with Remote Desktop |
 | Delete | Delete the VM (asks first) |
 | Shift+F10 or the Applications key | Every action for the VM |
+| Tab | The VM's checkpoints |
+
+In the list of checkpoints:
+
+| Key | Action |
+|---|---|
+| Enter | Apply the checkpoint (asks first) |
+| F2 | Rename it |
+| Delete | Delete the chosen checkpoints (asks first) |
+| Shift+Delete | Delete the checkpoint and those taken after it (asks first) |
+| Shift+Up or Down Arrow | Choose several |
+| Ctrl+Up or Down Arrow, then Ctrl+Space | Choose several apart |
+| Shift+F10 or the Applications key | Every action for the checkpoint |
 
 Anywhere in the window:
 
@@ -205,7 +229,8 @@ Anywhere in the window:
 | Ctrl+D | Clone |
 | Ctrl+Shift+S | Screenshot of the VM's screen |
 
-Every action is also on the VM menu (Alt+V) and in the list's context menu. The menu bar is
+Every action is also on the VM menu (Alt+V) and in the list's context menu; the checkpoint
+actions are on the Checkpoints menu (Alt+C). The menu bar is
 reached with Alt or F10, never with Tab. Help, then Keyboard Shortcuts opens these as a list, one
 shortcut per line and each section's heading a line of its own: arrow through it, and press
 Escape to close it.

@@ -667,6 +667,8 @@ public class LinuxScreenshotTests
         public Task CreateCheckpointAsync(string vmId, string checkpointName, CancellationToken ct = default) => _demo.CreateCheckpointAsync(vmId, checkpointName, ct);
         public Task<IReadOnlyList<CheckpointInfo>> GetCheckpointsAsync(string vmId, CancellationToken ct = default) => _demo.GetCheckpointsAsync(vmId, ct);
         public Task ApplyCheckpointAsync(string vmId, string checkpointId, string? saveCurrentAs, CancellationToken ct = default) => _demo.ApplyCheckpointAsync(vmId, checkpointId, saveCurrentAs, ct);
+        public Task DeleteCheckpointsAsync(string vmId, IReadOnlyList<string> checkpointIds, bool includeLater, CancellationToken ct = default) => _demo.DeleteCheckpointsAsync(vmId, checkpointIds, includeLater, ct);
+        public Task RenameCheckpointAsync(string vmId, string checkpointId, string newName, CancellationToken ct = default) => _demo.RenameCheckpointAsync(vmId, checkpointId, newName, ct);
         public Task CloneAsync(string vmId, string newName, CancellationToken ct = default) => _demo.CloneAsync(vmId, newName, ct);
         public Task<IReadOnlyList<string>> GetDiskPathsAsync(string vmId, CancellationToken ct = default) => _demo.GetDiskPathsAsync(vmId, ct);
         public Task<DeleteResult> DeleteAsync(string vmId, CancellationToken ct = default) => _demo.DeleteAsync(vmId, ct);
