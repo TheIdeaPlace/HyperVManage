@@ -266,19 +266,42 @@ public class CheckpointListTests
         var vm = new VmInfo("x") { Name = "Build Agent" };
         CheckpointInfo Cp(string name) => new(name, name, new DateTime(2026, 1, 1), false);
 
-        var one = MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Old")], withLater: false);
-        Assert.StartsWith("Delete checkpoint Old of Build Agent?", one);
-        Assert.Contains("Build Agent itself doesn't change", one);
-        Assert.Contains("go back to it,", one);
+        Assert.Equal(
+            "Delete checkpoint Old from Build Agent?\n\n" +
+            "You won't be able to take Build Agent back to that point any more. Build Agent itself won't change, and neither will its other checkpoints.\n\n" +
+            "This can't be undone.",
+            MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Old")], withLater: false));
 
-        var several = MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Old"), Cp("Older")], withLater: false);
-        Assert.StartsWith("Delete these 2 checkpoints of Build Agent?\n\nOld\nOlder\n\n", several);
-        Assert.Contains("go back to them,", several);
+        Assert.Equal(
+            "Delete these 2 checkpoints from Build Agent?\n\nOld\nOlder\n\n" +
+            "You won't be able to take Build Agent back to those points any more. Build Agent itself won't change, and neither will its other checkpoints.\n\n" +
+            "This can't be undone.",
+            MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Old"), Cp("Older")], withLater: false));
 
         var later = MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Root"), Cp("Next")], withLater: true);
-        Assert.StartsWith("Delete checkpoint Root of Build Agent, and the checkpoint taken after it?\n\nNext\n\n", later);
-        var laters = MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Root"), Cp("Next"), Cp("Last")], withLater: true);
-        Assert.StartsWith("Delete checkpoint Root of Build Agent, and the 2 checkpoints taken after it?\n\nNext\nLast\n\n", laters);
+        Assert.StartsWith("Delete checkpoint Root from Build Agent, and the checkpoint taken after it?\n\nNext\n\n", later);
+        Assert.Equal(
+            "Delete checkpoint Root from Build Agent, and the 2 checkpoints taken after it?\n\nNext\nLast\n\n" +
+            "You won't be able to take Build Agent back to any of those points. Build Agent itself won't change.\n\n" +
+            "This can't be undone.",
+            MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Root"), Cp("Next"), Cp("Last")], withLater: true));
+    }
+
+    [Fact]
+    public void TheVmDeleteQuestion_SaysWhatGoes_AndMentionsTurningOffOnlyForAVmThatIsOn()
+    {
+        var running = new VmInfo("x") { Name = "Win11-RDP", State = "Running" };
+        Assert.Equal(
+            "Delete Win11-RDP?\n\n" +
+            "This permanently deletes the virtual machine, its checkpoints, and this disk file:\nC:\\VMs\\Win11-RDP.vhdx\n\n" +
+            "Win11-RDP is running, so it's turned off first. The desktop connection file Win11-RDP.rdp and its saved sign-in " +
+            "are deleted too, if they connect to this VM.\n\nThis can't be undone.",
+            MainWindow.DeleteVmQuestion(running, [@"C:\VMs\Win11-RDP.vhdx"]));
+
+        var off = MainWindow.DeleteVmQuestion(new VmInfo("y") { Name = "Test2", State = "Off" }, ["a.vhdx", "b.vhdx"]);
+        Assert.Contains("and these disk files:\na.vhdx\nb.vhdx\n\nThe desktop connection file Test2.rdp", off);
+        Assert.DoesNotContain("turned off", off);
+        Assert.Contains("It has no disk files.", MainWindow.DeleteVmQuestion(new VmInfo("z") { Name = "Z", State = "Off" }, []));
     }
 
     [Fact]
