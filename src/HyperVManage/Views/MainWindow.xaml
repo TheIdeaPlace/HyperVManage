@@ -1,7 +1,7 @@
 <Window x:Class="HyperVManage.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hyper-V Manage" Width="900" Height="480" MinWidth="560" MinHeight="300"
+        Title="Hyper-V Manage" Width="900" Height="620" MinWidth="560" MinHeight="420"
         WindowStartupLocation="CenterScreen">
 
     <Window.InputBindings>
@@ -52,10 +52,21 @@
                 <MenuItem Header="Cl_one…" Command="{Binding CloneCommand}" InputGestureText="Ctrl+D"/>
                 <MenuItem Header="_Delete…" Command="{Binding DeleteCommand}" InputGestureText="Delete"/>
             </MenuItem>
+            <!-- For the checkpoints chosen in the checkpoint list, under the VM list. -->
+            <MenuItem Header="_Checkpoints">
+                <MenuItem Header="_New Checkpoint…" Command="{Binding CheckpointCommand}" InputGestureText="Ctrl+K"/>
+                <MenuItem Header="_Apply Checkpoint…" Command="{Binding ApplySelectedCheckpointCommand}" InputGestureText="Enter"/>
+                <MenuItem Header="_Rename Checkpoint…" Command="{Binding RenameCheckpointCommand}" InputGestureText="F2"/>
+                <Separator/>
+                <MenuItem Header="_Delete Checkpoint…" Command="{Binding DeleteCheckpointsCommand}" InputGestureText="Delete"/>
+                <MenuItem Header="Delete Checkpoint and _Those After It…" Command="{Binding DeleteCheckpointAndLaterCommand}" InputGestureText="Shift+Delete"/>
+            </MenuItem>
             <MenuItem Header="_Help">
-                <!-- Microsoft's ISO download pages, this PC's kind first; headers are set in code. -->
+                <!-- Microsoft's ISO download pages, this PC's kind first, then Ubuntu's for this
+                     PC; headers are set in code. -->
                 <MenuItem x:Name="IsoMenuThisPc" Click="IsoMenu_Click"/>
                 <MenuItem x:Name="IsoMenuOther" Click="IsoMenu_Click"/>
+                <MenuItem x:Name="IsoMenuUbuntu" Click="IsoMenu_Click"/>
                 <Separator/>
                 <MenuItem Header="_Keyboard Shortcuts" Click="Shortcuts_Click"/>
                 <MenuItem Header="Report a _Bug…" Click="ReportBug_Click"/>
@@ -71,6 +82,11 @@
         </StatusBar>
 
         <Grid Margin="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="170"/>
+            </Grid.RowDefinitions>
             <ListView x:Name="VmList"
                       ItemsSource="{Binding Vms}"
                       SelectedItem="{Binding Selected, Mode=TwoWay}"
@@ -127,6 +143,50 @@
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}"
                        IsHitTestVisible="False"/>
+
+            <!-- The selected VM's checkpoints, next in Tab order. Its name comes from the view
+                 model, so it says whose they are, and why the list is empty when it is. -->
+            <TextBlock Grid.Row="1" Text="{Binding CheckpointsHeading}" Margin="0,10,0,4" FontWeight="SemiBold"/>
+            <ListView x:Name="CheckpointList" Grid.Row="2"
+                      ItemsSource="{Binding Checkpoints}"
+                      SelectedItem="{Binding SelectedCheckpoint, Mode=TwoWay}"
+                      SelectionMode="Extended"
+                      AutomationProperties.Name="{Binding CheckpointsListName}"
+                      PreviewKeyDown="CheckpointList_PreviewKeyDown"
+                      SelectionChanged="CheckpointList_SelectionChanged"
+                      GotKeyboardFocus="CheckpointList_GotKeyboardFocus">
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
+                        <EventSetter Event="MouseDoubleClick" Handler="CheckpointRow_MouseDoubleClick"/>
+                        <EventSetter Event="ContextMenuOpening" Handler="CheckpointRow_ContextMenuOpening"/>
+                        <Setter Property="ContextMenu">
+                            <Setter.Value>
+                                <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                    <MenuItem Header="_Apply Checkpoint…" Command="{Binding ApplySelectedCheckpointCommand}" InputGestureText="Enter"/>
+                                    <MenuItem Header="_Rename Checkpoint…" Command="{Binding RenameCheckpointCommand}" InputGestureText="F2"/>
+                                    <Separator/>
+                                    <MenuItem Header="_Delete Checkpoint…" Command="{Binding DeleteCheckpointsCommand}" InputGestureText="Delete"/>
+                                    <MenuItem Header="Delete Checkpoint and _Those After It…" Command="{Binding DeleteCheckpointAndLaterCommand}" InputGestureText="Shift+Delete"/>
+                                    <Separator/>
+                                    <MenuItem Header="_New Checkpoint…" Command="{Binding CheckpointCommand}" InputGestureText="Ctrl+K"/>
+                                </ContextMenu>
+                            </Setter.Value>
+                        </Setter>
+                        <Setter Property="Tag" Value="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ListView}}"/>
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="Checkpoint" Width="300" DisplayMemberBinding="{Binding Name}"/>
+                        <GridViewColumn Header="Taken" Width="260" DisplayMemberBinding="{Binding TakenText}"/>
+                        <GridViewColumn Header="Now" Width="220" DisplayMemberBinding="{Binding NowText}"/>
+                    </GridView>
+                </ListView.View>
+            </ListView>
+            <TextBlock Grid.Row="2" Text="{Binding CheckpointsNote}" TextWrapping="Wrap" Margin="12,0"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+                       Visibility="{Binding IsCheckpointListEmpty, Converter={StaticResource BoolToVisibility}}"/>
         </Grid>
     </DockPanel>
 </Window>

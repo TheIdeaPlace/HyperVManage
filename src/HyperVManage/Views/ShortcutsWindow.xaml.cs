@@ -21,6 +21,17 @@ public partial class ShortcutsWindow : Window
             ("Enter", "connect with Remote Desktop"),
             ("Delete", "delete the VM (asks first)"),
             ("Shift+F10 or the Applications key", "every action for the VM"),
+            ("Tab", "the VM's checkpoints"),
+        ]),
+        ("In the list of checkpoints",
+        [
+            ("Enter", "apply the checkpoint (asks first)"),
+            ("F2", "rename it"),
+            ("Delete", "delete the chosen checkpoints (asks first)"),
+            ("Shift+Delete", "delete the checkpoint and those taken after it (asks first)"),
+            ("Shift+Up or Down Arrow", "choose several"),
+            ("Ctrl+Up or Down Arrow, then Ctrl+Space", "choose several apart"),
+            ("Shift+F10 or the Applications key", "every action for the checkpoint"),
         ]),
         ("Anywhere in the main window",
         [

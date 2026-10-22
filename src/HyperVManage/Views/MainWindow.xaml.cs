@@ -43,19 +43,38 @@ public partial class MainWindow : Window
             updates.OpenPage = Browser.Open;
         }
 
-        // Access keys D and W: Help already uses K and A.
+        // Access keys D, W and N: Help already uses K, B, U and A.
         var downloads = IsoDownloads.ForThisPcFirst(IsoFinder.HostIsArm64);
         IsoMenuThisPc.Header = "_" + downloads[0].Text;
         IsoMenuThisPc.Tag = downloads[0].Page;
         IsoMenuOther.Header = downloads[1].Text.Replace("Download Windows", "Download _Windows");
         IsoMenuOther.Tag = downloads[1].Page;
+        var ubuntu = IsoDownloads.UbuntuForThisPc(IsoFinder.HostIsArm64);
+        IsoMenuUbuntu.Header = ubuntu.Text.Replace("Ubuntu", "Ubu_ntu");
+        IsoMenuUbuntu.Tag = ubuntu.Page;
         DataContext = vm;
         if (demo) Title = "Hyper-V Manage (demo, pretend VMs)";
 
         vm.Announce += text => Announcer.Announce(this, text);
         vm.RequestCloneName = AskCloneName;
         vm.RequestCheckpointName = AskCheckpointName;
-        vm.RequestCheckpointToApply = (v, checkpoints) => ApplyCheckpointWindow.Ask(this, v, checkpoints);
+        vm.RequestCheckpointToApply = (v, checkpoints, chosen) => ApplyCheckpointWindow.Ask(this, v, checkpoints, chosen);
+        vm.RequestCheckpointRename = AskCheckpointRename;
+        vm.ConfirmDeleteCheckpoints = (v, going, withLater) => MessageBox.Show(this,
+            MainViewModel.DeleteCheckpointsQuestion(v, going, withLater),
+            going.Count == 1 ? "Delete checkpoint" : "Delete checkpoints",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes;
+        vm.CheckpointSelectionReplaced += () =>
+        {
+            if (IsActive && (CheckpointList.IsKeyboardFocusWithin || Keyboard.FocusedElement is null || ReferenceEquals(Keyboard.FocusedElement, this)))
+                FocusSelectedCheckpoint();
+        };
+        // Someone who tabbed to the list while it was being read is on the list itself; move them
+        // onto the first row when it arrives, so it's read. Nobody else is moved.
+        vm.CheckpointsArrived += () =>
+        {
+            if (IsActive && CheckpointList.IsKeyboardFocused) FocusSelectedCheckpoint();
+        };
         vm.ConfirmDelete = AskDelete;
         vm.SelectionReplaced += () =>
         {
@@ -160,6 +179,62 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Like <see cref="FocusSelectedRow"/>, for the checkpoint list.</summary>
+    private void FocusSelectedCheckpoint()
+    {
+        if (_vm.SelectedCheckpoint is not { } selected) { CheckpointList.Focus(); return; }
+        CheckpointList.ScrollIntoView(selected);
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (CheckpointList.ItemContainerGenerator.ContainerFromItem(selected) is ListViewItem row) row.Focus();
+            else CheckpointList.Focus();
+        }, DispatcherPriority.Input);
+    }
+
+    private void CheckpointList_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        // As in the VM list: only while focus is in the list, so they never fire from a menu.
+        var command = (Keyboard.Modifiers, e.Key) switch
+        {
+            (ModifierKeys.None, Key.Enter) => _vm.ApplySelectedCheckpointCommand,
+            (ModifierKeys.None, Key.F2) => _vm.RenameCheckpointCommand,
+            (ModifierKeys.None, Key.Delete) => _vm.DeleteCheckpointsCommand,
+            (ModifierKeys.Shift, Key.Delete) => _vm.DeleteCheckpointAndLaterCommand,
+            _ => (CommunityToolkit.Mvvm.Input.IRelayCommand?)null,
+        };
+        if (command is null) return;
+        // Handled even when it can't run now, so Enter never falls through to anything else; and
+        // then it says why, rather than nothing.
+        e.Handled = true;
+        if (command.CanExecute(null)) command.Execute(null);
+        else _vm.ExplainCheckpointAction(command);
+    }
+
+    /// <summary>Shift+F10 on a row that has focus but isn't chosen (Ctrl+arrows move focus
+    /// alone) chooses it, so the menu acts on the row it was opened on.</summary>
+    private void CheckpointRow_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (sender is not ListViewItem { IsSelected: false } row) return;
+        CheckpointList.SelectedItems.Clear();
+        row.IsSelected = true;
+    }
+
+    private void CheckpointList_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        _vm.SelectedCheckpoints = CheckpointList.SelectedItems.Cast<CheckpointRow>().ToList();
+
+    /// <summary>Tabbing to the list lands on the list itself the first time, or after its rows
+    /// were replaced by another VM's: move on to the selected row, so a screen reader reads it
+    /// and arrowing starts there.</summary>
+    private void CheckpointList_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (ReferenceEquals(e.NewFocus, CheckpointList) && _vm.SelectedCheckpoint is not null) FocusSelectedCheckpoint();
+    }
+
+    private void CheckpointRow_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_vm.ApplySelectedCheckpointCommand.CanExecute(null)) _vm.ApplySelectedCheckpointCommand.Execute(null);
+    }
+
     private void VmList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (_vm.ConnectCommand.CanExecute(null)) _vm.ConnectCommand.Execute(null);
@@ -177,6 +252,12 @@ public partial class MainWindow : Window
             "Checkpoint name:",
             $"{vm.Name} {DateTime.Now:yyyy-MM-dd HH.mm}",
             "A checkpoint saves the VM as it is now, so you can go back to it later with Apply Checkpoint.");
+
+    private string? AskCheckpointRename(VmInfo vm, CheckpointInfo checkpoint) =>
+        PromptWindow.Ask(this, $"Rename checkpoint {checkpoint.Name}",
+            "New name:",
+            checkpoint.Name,
+            $"Only the name changes. {vm.Name} and what the checkpoint kept stay as they are.");
 
     private bool AskDelete(VmInfo vm, IReadOnlyList<string> disks)
     {
@@ -280,7 +361,11 @@ public partial class MainWindow : Window
         try
         {
             HyperVManage.Services.IsoDownloads.Open(page);
-            Announcer.Announce(this, "Opening the download page in your browser.");
+            Announcer.Announce(this, ReferenceEquals(sender, IsoMenuUbuntu)
+                ? "Opening Ubuntu's download folder in your browser. New Ubuntu Virtual Machine downloads Ubuntu itself, " +
+                  "but uses the newest desktop ISO, ending in desktop-" + (IsoFinder.HostIsArm64 ? "arm64" : "amd64") +
+                  ".iso, from your Downloads folder instead, if it keeps the name it downloads with."
+                : "Opening the download page in your browser.");
         }
         catch (Exception ex) { Announcer.Announce(this, $"Couldn't open the download page: {ex.Message}"); }
     }

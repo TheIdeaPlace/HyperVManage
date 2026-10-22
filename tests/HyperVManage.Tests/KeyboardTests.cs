@@ -131,4 +131,48 @@ public class KeyboardTests
         }
         finally { window.Close(); }
     }
+    [StaFact(Skip = InputTests.SkipReason, SkipUnless = nameof(InputTests.Enabled), SkipType = typeof(InputTests))]
+    public async Task MainWindow_TabGoesFromTheVmsToTheirCheckpoints_WhereDeleteDeletesACheckpoint()
+    {
+        TestApp.Ensure();
+        var vm = new MainViewModel(new HyperVManage.Services.DemoHyperVService { Delay = TimeSpan.Zero });
+        await vm.RefreshAsync();
+        var window = new MainWindow(vm, demo: true) { WindowStartupLocation = WindowStartupLocation.Manual, Left = 0, Top = 0 };
+        window.Show();
+        window.Activate();
+        Pump();
+        try
+        {
+            var vms = (ListView)window.FindName("VmList");
+            var agent = vm.Vms.Single(v => v.Name == "Build Agent");
+            vm.Selected = agent;
+            Pump();
+            ((ListViewItem)vms.ItemContainerGenerator.ContainerFromItem(agent)).Focus();
+            Pump();
+
+            Press(window, Key.Tab);
+            var checkpoints = (ListView)window.FindName("CheckpointList");
+            // On the selected row itself, so a screen reader reads the checkpoint, not just the list.
+            var row = Assert.IsType<ListViewItem>(Keyboard.FocusedElement);
+            Assert.Same(checkpoints, ItemsControl.ItemsControlFromItemContainer(row));
+            Assert.Same(vm.Checkpoints[0], row.DataContext);
+
+            var asked = false;
+            vm.ConfirmDelete = (_, _) => throw new InvalidOperationException("Delete in the checkpoint list asked to delete the VM");
+            vm.ConfirmDeleteCheckpoints = (_, going, _) => { asked = true; return true; };
+            // Real input raises the preview half first, which is where the list handles its keys.
+            var source = PresentationSource.FromVisual(window)!;
+            var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Delete) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            InputManager.Current.ProcessInput(preview);
+            if (!preview.Handled) Press(window, Key.Delete);
+            for (var i = 0; i < 5 && vm.Checkpoints.Count == 3; i++) Pump();
+
+            Assert.True(asked);
+            Assert.Equal(2, vm.Checkpoints.Count);
+            Assert.Contains(agent, vm.Vms);
+            // Focus moved to the row that took its place, so Delete can be pressed again.
+            Assert.True(checkpoints.IsKeyboardFocusWithin, $"focus left the checkpoint list for {Keyboard.FocusedElement}");
+        }
+        finally { window.Close(); }
+    }
 }

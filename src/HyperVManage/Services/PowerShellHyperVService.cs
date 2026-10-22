@@ -115,6 +115,7 @@ public sealed class PowerShellHyperVService : IHyperVService
                 Name = $_.Name
                 Created = $_.CreationTime.ToString('o')
                 IsCurrent = [bool]($vm.ParentSnapshotId -and $_.Id -eq $vm.ParentSnapshotId)
+                ParentId = if ($_.ParentSnapshotId) { $_.ParentSnapshotId.ToString() } else { '' }
             }
         })
         ConvertTo-Json -InputObject $checkpoints -Depth 2 -Compress
@@ -145,6 +146,52 @@ public sealed class PowerShellHyperVService : IHyperVService
         lines.Add("Restore-VMSnapshot -VMSnapshot $checkpoint -Confirm:$false");
         return string.Join("\n", lines);
     }
+
+    public Task DeleteCheckpointsAsync(string vmId, IReadOnlyList<string> checkpointIds, bool includeLater, CancellationToken ct = default) =>
+        PowerShellRunner.RunAsync(BuildDeleteCheckpointsScript(vmId, checkpointIds, includeLater), ct);
+
+    /// <summary>
+    /// Every checkpoint is found by id before any is removed, so one deleted meanwhile deletes
+    /// nothing. Remove-VMSnapshot works on a running VM too; Hyper-V merges the disks afterwards.
+    /// </summary>
+    internal static string BuildDeleteCheckpointsScript(string vmId, IReadOnlyList<string> checkpointIds, bool includeLater)
+    {
+        if (checkpointIds.Count == 0) throw new ArgumentException("No checkpoints to delete.", nameof(checkpointIds));
+        var lines = new List<string>
+        {
+            GetVm(vmId).TrimEnd(),
+            $"$ids = @({string.Join(", ", checkpointIds.Select(Ps.Quote))})",
+            "$all = @(Get-VMSnapshot -VM $vm)",
+            "$found = foreach ($id in $ids) { $all | Where-Object { $_.Id.ToString() -eq $id } | Select-Object -First 1 }",
+            "if (@($found).Count -ne $ids.Count) { throw 'A checkpoint you chose no longer exists, so none were deleted.' }",
+        };
+        if (includeLater)
+        {
+            // The first is the one they follow; the rest are every one after it that the user was
+            // asked about. Hyper-V removes every one after it, hidden backup ones and any taken
+            // since the list was read included, so it goes ahead only if those are the same.
+            lines.Add("""
+                $later = @(); $next = @($found[0].Id.ToString())
+                while ($next.Count) {
+                    $children = @($all | Where-Object { $_.ParentSnapshotId -and $next -contains $_.ParentSnapshotId.ToString() } | ForEach-Object { $_.Id.ToString() })
+                    $later += $children; $next = $children
+                }
+                if ((@($later | Sort-Object) -join ',') -ne (@($ids | Select-Object -Skip 1 | Sort-Object) -join ',')) { throw 'The checkpoints after it have changed since the list was read, so none were deleted. Press F5 and try again.' }
+                Remove-VMSnapshot -VMSnapshot $found[0] -IncludeAllChildSnapshots -Confirm:$false
+                """);
+        }
+        else lines.Add("foreach ($c in $found) { Remove-VMSnapshot -VMSnapshot $c -Confirm:$false }");
+        return string.Join("\n", lines);
+    }
+
+    public Task RenameCheckpointAsync(string vmId, string checkpointId, string newName, CancellationToken ct = default) =>
+        PowerShellRunner.RunAsync(BuildRenameCheckpointScript(vmId, checkpointId, newName), ct);
+
+    internal static string BuildRenameCheckpointScript(string vmId, string checkpointId, string newName) => string.Join("\n",
+        GetVm(vmId).TrimEnd(),
+        $"$checkpoint = Get-VMSnapshot -VM $vm | Where-Object {{ $_.Id.ToString() -eq {Ps.Quote(checkpointId)} }}",
+        "if (-not $checkpoint) { throw 'That checkpoint no longer exists.' }",
+        $"Rename-VMSnapshot -VMSnapshot $checkpoint -NewName {Ps.Quote(newName)}");
 
     public Task CloneAsync(string vmId, string newName, CancellationToken ct = default) =>
         PowerShellRunner.RunAsync(BuildCloneScript(vmId, newName), ct);
@@ -512,7 +559,7 @@ public sealed class PowerShellHyperVService : IHyperVService
             .Select(e => new CheckpointInfo(Str(e, "Id"), Str(e, "Name"),
                 DateTimeOffset.TryParse(Str(e, "Created"), System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.None, out var created) ? created.LocalDateTime : default,
-                Flag(e, "IsCurrent")))
+                Flag(e, "IsCurrent"), Str(e, "ParentId")))
             .ToList();
     }
 

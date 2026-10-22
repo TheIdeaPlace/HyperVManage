@@ -22,6 +22,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         _hyperV = hyperV;
         Screenshots = new ScreenshotTaker(hyperV, credentials ?? new InMemoryCredentialStore());
+        Checkpoints.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(IsCheckpointListEmpty));
+            OnPropertyChanged(nameof(CheckpointsListName));
+            RefreshCheckpointCommandStates();
+        };
     }
 
     /// <summary>Takes Screenshot's pictures, asking for a VM's sign-in through its AskSignIn.</summary>
@@ -45,8 +51,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     // The window answers these. Null means the user cancelled.
     public Func<VmInfo, string?>? RequestCloneName { get; set; }
     public Func<VmInfo, string?>? RequestCheckpointName { get; set; }
-    /// <summary>Asked which of the VM's checkpoints to apply, newest first.</summary>
-    public Func<VmInfo, IReadOnlyList<CheckpointInfo>, CheckpointChoice?>? RequestCheckpointToApply { get; set; }
+    /// <summary>Asked which of the VM's checkpoints to apply, newest first, with the one chosen in
+    /// the checkpoint list already chosen, or null to start from the newest.</summary>
+    public Func<VmInfo, IReadOnlyList<CheckpointInfo>, CheckpointInfo?, CheckpointChoice?>? RequestCheckpointToApply { get; set; }
     /// <summary>Asked before deleting, with the disk files that would go.</summary>
     public Func<VmInfo, IReadOnlyList<string>, bool>? ConfirmDelete { get; set; }
     public Action<VmInfo>? OpenSettings { get; set; }
@@ -62,12 +69,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (oldValue is not null) oldValue.PropertyChanged -= OnSelectedPropertyChanged;
         if (newValue is not null) newValue.PropertyChanged += OnSelectedPropertyChanged;
         RefreshCommandStates();
+        _ = LoadCheckpointsAsync();
     }
 
     private void OnSelectedPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(VmInfo.State) or nameof(VmInfo.IsBusy) or nameof(VmInfo.IpAddresses) or nameof(VmInfo.CheckpointCount))
             RefreshCommandStates();
+        // Taken or deleted elsewhere, as the ten-second read shows; or renamed.
+        if (e.PropertyName is nameof(VmInfo.CheckpointCount) or nameof(VmInfo.Name)) _ = LoadCheckpointsAsync();
     }
 
     private void RefreshCommandStates()
@@ -76,6 +86,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                      PauseCommand, ResumeCommand, RestartCommand, ConnectCommand, OpenConsoleCommand, SaveConnectionFileCommand, ScreenshotCommand,
                      SettingsCommand, CheckpointCommand, ApplyCheckpointCommand, CloneCommand, DeleteCommand })
             c.NotifyCanExecuteChanged();
+        RefreshCheckpointCommandStates();
     }
 
     // ── Loading ──────────────────────────────────────────────────────────────
@@ -99,8 +110,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException) { }
     }
 
+    /// <summary>F5: the VMs, and the selected one's checkpoints, which the ten-second read
+    /// leaves alone unless their number changes.</summary>
     [RelayCommand]
-    private Task Refresh() => RefreshAsync();
+    private async Task Refresh()
+    {
+        await RefreshAsync();
+        await LoadCheckpointsAsync();
+    }
 
     /// <summary>
     /// Reads the VMs and merges them into the list: existing rows are updated in place, new ones
@@ -266,11 +283,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var name = RequestCheckpointName?.Invoke(vm);
         if (string.IsNullOrWhiteSpace(name)) return Task.CompletedTask;
         return RunAsync(vm, $"Creating checkpoint {name} of {vm.Name}.",
-            v => _hyperV.CreateCheckpointAsync(v.Id, name.Trim()), v => $"Checkpoint {name.Trim()} created for {v.Name}.");
+            v => _hyperV.CreateCheckpointAsync(v.Id, name.Trim()), v => $"Checkpoint {name.Trim()} created for {v.Name}.", checkpoints: true);
     }
 
     [RelayCommand(CanExecute = nameof(CanApplyCheckpoint))]
-    private async Task ApplyCheckpoint()
+    private Task ApplyCheckpoint() => ApplyAsync(chosenId: null);
+
+    /// <param name="chosenId">The checkpoint chosen in the list, to start from; null for the newest.</param>
+    private async Task ApplyAsync(string? chosenId)
     {
         var vm = Selected!;
         IReadOnlyList<CheckpointInfo> checkpoints;
@@ -285,7 +305,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Announce?.Invoke(StatusText);
             return;
         }
-        if (RequestCheckpointToApply?.Invoke(vm, checkpoints) is not { } choice) return;
+        var chosen = chosenId is null ? null : checkpoints.FirstOrDefault(c => c.Id == chosenId);
+        if (chosenId is not null && chosen is null)
+        {
+            StatusText = "That checkpoint no longer exists.";
+            Announce?.Invoke(StatusText);
+            await LoadCheckpointsAsync();
+            return;
+        }
+        if (RequestCheckpointToApply?.Invoke(vm, checkpoints, chosen) is not { } choice) return;
 
         var name = choice.Checkpoint.Name;
         var savedAs = choice.SaveCurrentFirst ? $"Before applying {name}, {DateTime.Now:yyyy-MM-dd HH.mm}" : null;
@@ -301,7 +329,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 }
             },
             v => $"{v.Name} is back at checkpoint {name}, and is {v.StateText.ToLowerInvariant()}." +
-                 (savedAs is null ? "" : $" How it was before is kept as checkpoint {savedAs}."));
+                 (savedAs is null ? "" : $" How it was before is kept as checkpoint {savedAs}."), checkpoints: true);
     }
 
     internal static string PartwayNote(VmInfo vm, string? savedAs) =>
@@ -361,7 +389,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>Runs one operation on a VM: marks it busy, says what is happening, then refreshes
     /// and says how it ended. Failures carry Hyper-V's own message.</summary>
-    internal async Task RunAsync(VmInfo vm, string starting, Func<VmInfo, Task> op, Func<VmInfo, string> finished)
+    /// <param name="checkpoints">It changes checkpoints: read the list of them again before saying
+    /// it's done. A rename, or which one the VM is based on, changes no count for the VM list's
+    /// read to notice.</param>
+    internal async Task RunAsync(VmInfo vm, string starting, Func<VmInfo, Task> op, Func<VmInfo, string> finished, bool checkpoints = false)
     {
         vm.IsBusy = true;
         StatusText = starting;
@@ -371,6 +402,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             await op(vm);
             vm.IsBusy = false;
             await RefreshAsync(quiet: true, mustRead: true);
+            if (checkpoints && ReferenceEquals(vm, Selected)) await LoadCheckpointsAsync();
             var text = finished(vm);
             StatusText = text;
             Announce?.Invoke(text);
@@ -380,6 +412,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             vm.IsBusy = false;
             Fail(vm, $"{vm.Name}: that didn't work", ex);
             await RefreshAsync(quiet: true, mustRead: true);
+            if (checkpoints && ReferenceEquals(vm, Selected)) await LoadCheckpointsAsync();
         }
     }
 
@@ -392,6 +425,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _checkpointRead?.Dispose();
         _lifetime.Cancel();
         _lifetime.Dispose();
     }
