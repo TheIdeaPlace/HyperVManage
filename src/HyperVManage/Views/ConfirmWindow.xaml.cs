@@ -1,5 +1,4 @@
-using System.Windows;
-using System.Windows.Automation;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 
@@ -40,10 +39,8 @@ public partial class ConfirmWindow : Window
         }
         var start = yesFirst ? w.YesButton : w.NoButton;
         start.IsDefault = true;
-        // Also the description of the button that starts with focus, which screen readers speak
-        // after its name, in case one doesn't read the dialog's text as it opens. Only that one,
-        // so tabbing to the other doesn't read it all again.
-        AutomationProperties.SetHelpText(start, question);
+        // The buttons are their on-screen text and nothing more. The question is heard as the
+        // dialog's text when it opens, as with a message box.
         // Also the window's remembered focus, so activating it, however late, comes back to the
         // button.
         FocusManager.SetFocusedElement(w, start);

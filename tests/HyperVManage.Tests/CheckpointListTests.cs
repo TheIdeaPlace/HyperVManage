@@ -658,8 +658,13 @@ public class CheckpointWindowTests
             Assert.True(no.IsDefault);  // and so does Enter
             Assert.False(yes.IsDefault);
             Assert.Equal("Delete virtual machine", w.Title);
-            Assert.Equal("Delete Test2?\n\nThis can't be undone.", UIElementAutomationPeer.CreatePeerForElement(no).GetHelpText());
-            Assert.Equal("", AutomationProperties.GetHelpText(yes));
+            // Buttons are their on-screen text, with no description added.
+            foreach (var button in new[] { yes, no })
+            {
+                var peer = UIElementAutomationPeer.CreatePeerForElement(button);
+                Assert.Equal((string)button.Content == "_Yes" ? "Yes" : "No", peer.GetName());
+                Assert.Equal("", peer.GetHelpText());
+            }
             // Plain text, as a message box's is, which screen readers read as the dialog opens.
             var text = (TextBlock)w.FindName("QuestionText");
             Assert.Equal("Delete Test2?\n\nThis can't be undone.", text.Text);
