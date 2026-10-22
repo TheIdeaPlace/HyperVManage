@@ -37,8 +37,7 @@ public partial class MainWindow : Window
         if (updates is not null)
         {
             updates.Report = text => { _vm.StatusText = text; Announcer.Announce(this, text); };
-            updates.Confirm = question => MessageBox.Show(this, question, "Check for Updates",
-                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes) == MessageBoxResult.Yes;
+            updates.Confirm = question => ConfirmWindow.Ask(this, question, "Check for Updates", yesFirst: true);
             updates.Busy = () => _newVmWindow is { IsBuilding: true } || _vm.Vms.Any(v => v.IsBusy);
             updates.OpenPage = Browser.Open;
         }
@@ -60,10 +59,9 @@ public partial class MainWindow : Window
         vm.RequestCheckpointName = AskCheckpointName;
         vm.RequestCheckpointToApply = (v, checkpoints, chosen) => ApplyCheckpointWindow.Ask(this, v, checkpoints, chosen);
         vm.RequestCheckpointRename = AskCheckpointRename;
-        vm.ConfirmDeleteCheckpoints = (v, going, withLater) => MessageBox.Show(this,
+        vm.ConfirmDeleteCheckpoints = (v, going, withLater) => ConfirmWindow.Ask(this,
             MainViewModel.DeleteCheckpointsQuestion(v, going, withLater),
-            going.Count == 1 ? "Delete checkpoint" : "Delete checkpoints",
-            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes;
+            going.Count == 1 ? "Delete checkpoint" : "Delete checkpoints", warning: true);
         vm.CheckpointSelectionReplaced += () =>
         {
             if (IsActive && (CheckpointList.IsKeyboardFocusWithin || Keyboard.FocusedElement is null || ReferenceEquals(Keyboard.FocusedElement, this)))
@@ -259,17 +257,23 @@ public partial class MainWindow : Window
             checkpoint.Name,
             $"Only the name changes. {vm.Name} and what the checkpoint kept stay as they are.");
 
-    private bool AskDelete(VmInfo vm, IReadOnlyList<string> disks)
+    private bool AskDelete(VmInfo vm, IReadOnlyList<string> disks) =>
+        ConfirmWindow.Ask(this, DeleteVmQuestion(vm, disks), "Delete virtual machine", warning: true);
+
+    /// <summary>
+    /// Only what will happen to this VM. A disk another VM turns out to rely on is kept, and the
+    /// message after the delete says so; saying it here for every VM read as if it applied.
+    /// Turning off is mentioned only for a VM that is on.
+    /// </summary>
+    internal static string DeleteVmQuestion(VmInfo vm, IReadOnlyList<string> disks)
     {
-        // Only what will happen to this VM. A disk another VM turns out to rely on is kept, and the
-        // message after the delete says so; saying it here for every VM read as if it applied.
-        var files = disks.Count == 0 ? "It has no disks attached." : "Its disk files are deleted with it:\n" + string.Join("\n", disks);
-        var answer = MessageBox.Show(this,
-            $"Delete {vm.Name}?\n\nThis turns it off and permanently deletes the virtual machine and its checkpoints. " +
-            $"{files}\n\nThe desktop connection file {vm.Name}.rdp and its saved sign-in are deleted too, if they " +
-            "connect to this VM. It can't be undone.",
-            "Delete virtual machine", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-        return answer == MessageBoxResult.Yes;
+        var what = disks.Count == 0
+            ? "This permanently deletes the virtual machine and its checkpoints. It has no disk files."
+            : $"This permanently deletes the virtual machine, its checkpoints, and {(disks.Count == 1 ? "this disk file" : "these disk files")}:\n"
+              + string.Join("\n", disks);
+        var off = VmStates.CanTurnOff(vm.State) ? $"{vm.Name} is {vm.StateText.ToLowerInvariant()}, so it's turned off first. " : "";
+        return $"Delete {vm.Name}?\n\n{what}\n\n{off}The desktop connection file {vm.Name}.rdp and its saved sign-in " +
+            "are deleted too, if they connect to this VM.\n\nThis can't be undone.";
     }
 
     private void ShowSettings(VmInfo vm)

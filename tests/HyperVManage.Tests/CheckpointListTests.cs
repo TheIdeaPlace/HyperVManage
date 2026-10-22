@@ -266,19 +266,42 @@ public class CheckpointListTests
         var vm = new VmInfo("x") { Name = "Build Agent" };
         CheckpointInfo Cp(string name) => new(name, name, new DateTime(2026, 1, 1), false);
 
-        var one = MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Old")], withLater: false);
-        Assert.StartsWith("Delete checkpoint Old of Build Agent?", one);
-        Assert.Contains("Build Agent itself doesn't change", one);
-        Assert.Contains("go back to it,", one);
+        Assert.Equal(
+            "Delete checkpoint Old from Build Agent?\n\n" +
+            "You won't be able to take Build Agent back to that point any more. Build Agent itself won't change, and neither will its other checkpoints.\n\n" +
+            "This can't be undone.",
+            MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Old")], withLater: false));
 
-        var several = MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Old"), Cp("Older")], withLater: false);
-        Assert.StartsWith("Delete these 2 checkpoints of Build Agent?\n\nOld\nOlder\n\n", several);
-        Assert.Contains("go back to them,", several);
+        Assert.Equal(
+            "Delete these 2 checkpoints from Build Agent?\n\nOld\nOlder\n\n" +
+            "You won't be able to take Build Agent back to those points any more. Build Agent itself won't change, and neither will its other checkpoints.\n\n" +
+            "This can't be undone.",
+            MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Old"), Cp("Older")], withLater: false));
 
         var later = MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Root"), Cp("Next")], withLater: true);
-        Assert.StartsWith("Delete checkpoint Root of Build Agent, and the checkpoint taken after it?\n\nNext\n\n", later);
-        var laters = MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Root"), Cp("Next"), Cp("Last")], withLater: true);
-        Assert.StartsWith("Delete checkpoint Root of Build Agent, and the 2 checkpoints taken after it?\n\nNext\nLast\n\n", laters);
+        Assert.StartsWith("Delete checkpoint Root from Build Agent, and the checkpoint taken after it?\n\nNext\n\n", later);
+        Assert.Equal(
+            "Delete checkpoint Root from Build Agent, and the 2 checkpoints taken after it?\n\nNext\nLast\n\n" +
+            "You won't be able to take Build Agent back to any of those points. Build Agent itself won't change.\n\n" +
+            "This can't be undone.",
+            MainViewModel.DeleteCheckpointsQuestion(vm, [Cp("Root"), Cp("Next"), Cp("Last")], withLater: true));
+    }
+
+    [Fact]
+    public void TheVmDeleteQuestion_SaysWhatGoes_AndMentionsTurningOffOnlyForAVmThatIsOn()
+    {
+        var running = new VmInfo("x") { Name = "Win11-RDP", State = "Running" };
+        Assert.Equal(
+            "Delete Win11-RDP?\n\n" +
+            "This permanently deletes the virtual machine, its checkpoints, and this disk file:\nC:\\VMs\\Win11-RDP.vhdx\n\n" +
+            "Win11-RDP is running, so it's turned off first. The desktop connection file Win11-RDP.rdp and its saved sign-in " +
+            "are deleted too, if they connect to this VM.\n\nThis can't be undone.",
+            MainWindow.DeleteVmQuestion(running, [@"C:\VMs\Win11-RDP.vhdx"]));
+
+        var off = MainWindow.DeleteVmQuestion(new VmInfo("y") { Name = "Test2", State = "Off" }, ["a.vhdx", "b.vhdx"]);
+        Assert.Contains("and these disk files:\na.vhdx\nb.vhdx\n\nThe desktop connection file Test2.rdp", off);
+        Assert.DoesNotContain("turned off", off);
+        Assert.Contains("It has no disk files.", MainWindow.DeleteVmQuestion(new VmInfo("z") { Name = "Z", State = "Off" }, []));
     }
 
     [Fact]
@@ -608,6 +631,103 @@ public class CheckpointWindowTests
             Assert.Equal(topKeys.Count, topKeys.Distinct().Count());
         }
         finally { window.Close(); }
+    }
+
+    private static ConfirmWindow ShowConfirm(bool yesFirst = false)
+    {
+        TestApp.Ensure();
+        var w = ConfirmWindow.Create("Delete Test2?\n\nThis can't be undone.", "Delete virtual machine", yesFirst, warning: !yesFirst);
+        w.ShowActivated = false;
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.Left = w.Top = -10000;
+        w.Show();
+        Pump();
+        return w;
+    }
+
+    [StaFact]
+    public void ConfirmWindow_StartsOnNo_WhichEscapeAndEnterAnswer_AndSpeaksTheQuestion()
+    {
+        var w = ShowConfirm();
+        try
+        {
+            var no = (Button)w.FindName("NoButton");
+            var yes = (Button)w.FindName("YesButton");
+            Assert.True(no.IsKeyboardFocused);
+            Assert.True(no.IsCancel);   // Escape, and the close button, answer No
+            Assert.True(no.IsDefault);  // and so does Enter
+            Assert.False(yes.IsDefault);
+            Assert.Equal("Delete virtual machine", w.Title);
+            // Buttons are their on-screen text, with no description added.
+            foreach (var button in new[] { yes, no })
+            {
+                var peer = UIElementAutomationPeer.CreatePeerForElement(button);
+                Assert.Equal((string)button.Content == "_Yes" ? "Yes" : "No", peer.GetName());
+                Assert.Equal("", peer.GetHelpText());
+            }
+            // Plain text, as a message box's is, which screen readers read as the dialog opens.
+            var text = (TextBlock)w.FindName("QuestionText");
+            Assert.Equal("Delete Test2?\n\nThis can't be undone.", text.Text);
+            var icon = (Image)w.FindName("WarningIcon");
+            Assert.Equal(Visibility.Visible, icon.Visibility);
+            Assert.NotNull(icon.Source);
+        }
+        finally { w.Close(); }
+    }
+
+    [StaFact]
+    public void ConfirmWindow_ForAQuestionWhoseUsualAnswerIsYes_StartsOnYes()
+    {
+        var w = ShowConfirm(yesFirst: true);
+        try
+        {
+            var yes = (Button)w.FindName("YesButton");
+            Assert.True(yes.IsKeyboardFocused);
+            Assert.True(yes.IsDefault);
+            Assert.True(((Button)w.FindName("NoButton")).IsCancel);
+            Assert.Equal(Visibility.Collapsed, ((Image)w.FindName("WarningIcon")).Visibility);
+        }
+        finally { w.Close(); }
+    }
+
+    /// <summary>Shows the window as a dialog, does something to it once it's up, and returns its
+    /// answer. Closes it after five seconds rather than hang, and fails if it had to.</summary>
+    private static bool? Answer(Action<ConfirmWindow> act)
+    {
+        TestApp.Ensure();
+        var w = ConfirmWindow.Create("Delete Test2?", "Delete virtual machine");
+        w.ShowActivated = false;
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.Left = w.Top = -10000;
+        var timedOut = false;
+        var guard = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        guard.Tick += (_, _) => { guard.Stop(); timedOut = true; w.Close(); };
+        w.Loaded += (_, _) => { guard.Start(); w.Dispatcher.BeginInvoke(() => act(w), DispatcherPriority.Input); };
+        var answer = w.ShowDialog();
+        guard.Stop();
+        Assert.False(timedOut, "the window didn't close");
+        return answer;
+    }
+
+    [StaFact]
+    public void ConfirmWindow_Yes_AnswersYes_AndClosingIt_AnswersNo()
+    {
+        Assert.True(Answer(w => ((Button)w.FindName("YesButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent))));
+        Assert.NotEqual(true, Answer(w => w.Close()));
+    }
+
+    [StaFact(Skip = InputTests.SkipReason, SkipUnless = nameof(InputTests.Enabled), SkipType = typeof(InputTests))]
+    public void ConfirmWindow_Escape_AnswersNo()
+    {
+        var answer = Answer(w =>
+        {
+            w.Activate();
+            var source = PresentationSource.FromVisual(w)!;
+            System.Windows.Input.InputManager.Current.ProcessInput(new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Escape)
+            { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent });
+        });
+        Assert.NotEqual(true, answer);
     }
 
     [StaFact]

@@ -276,14 +276,17 @@ public sealed partial class MainViewModel
     /// stays as it is.</summary>
     internal static string DeleteCheckpointsQuestion(VmInfo vm, IReadOnlyList<CheckpointInfo> going, bool withLater)
     {
-        var question = going.Count == 1
-            ? $"Delete checkpoint {going[0].Name} of {vm.Name}?"
+        // Says what is lost, going back to those points, and what isn't: the VM as it is now and
+        // its other checkpoints. Hyper-V merging the disks is how, which nobody needs to hear.
+        var (question, after) = going.Count == 1
+            ? ($"Delete checkpoint {going[0].Name} from {vm.Name}?",
+               $"You won't be able to take {vm.Name} back to that point any more. {vm.Name} itself won't change, and neither will its other checkpoints.")
             : withLater
-                ? $"Delete checkpoint {going[0].Name} of {vm.Name}, and the {(going.Count == 2 ? "checkpoint" : $"{going.Count - 1} checkpoints")} taken after it?\n\n"
-                  + string.Join("\n", going.Skip(1).Select(c => c.Name))
-                : $"Delete these {going.Count} checkpoints of {vm.Name}?\n\n" + string.Join("\n", going.Select(c => c.Name));
-        var them = going.Count == 1 ? "it" : "them";
-        return question + $"\n\n{vm.Name} itself doesn't change: what each checkpoint kept is merged into what came after it. " +
-            $"You can no longer go back to {them}, and it can't be undone.";
+                ? ($"Delete checkpoint {going[0].Name} from {vm.Name}, and the {(going.Count == 2 ? "checkpoint" : $"{going.Count - 1} checkpoints")} taken after it?\n\n"
+                   + string.Join("\n", going.Skip(1).Select(c => c.Name)),
+                   $"You won't be able to take {vm.Name} back to any of those points. {vm.Name} itself won't change.")
+                : ($"Delete these {going.Count} checkpoints from {vm.Name}?\n\n" + string.Join("\n", going.Select(c => c.Name)),
+                   $"You won't be able to take {vm.Name} back to those points any more. {vm.Name} itself won't change, and neither will its other checkpoints.");
+        return $"{question}\n\n{after}\n\nThis can't be undone.";
     }
 }

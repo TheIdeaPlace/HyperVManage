@@ -245,12 +245,12 @@ public partial class NewVmWindow : Window
         {
             e.Cancel = true;
             if (_closeWhenStopped) return; // already stopping; it closes when the cleanup is done
-            var answer = MessageBox.Show(this,
+            var stop = ConfirmWindow.Ask(this,
                 "The virtual machine is still being built. Stop the build?\n\n" +
                 "Whatever it has made so far is cleaned up. If it has already got as far as creating the VM, " +
                 "that VM is left in the list for you to delete.",
-                "Stop building the VM?", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-            if (answer != MessageBoxResult.Yes) return;
+                "Stop building the VM?", warning: true);
+            if (!stop) return;
             if (!_vm.IsRunning)
             {
                 // It finished while the question was up: nothing to stop, so just close.
