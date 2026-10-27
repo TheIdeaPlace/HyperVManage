@@ -132,6 +132,137 @@ public class KeyboardTests
         finally { window.Close(); }
     }
     [StaFact(Skip = InputTests.SkipReason, SkipUnless = nameof(InputTests.Enabled), SkipType = typeof(InputTests))]
+    public async Task MainWindow_ArrowsFromTheCheckpointListItself_StayInIt()
+    {
+        // Ctrl+click can leave no checkpoint chosen, and Tab then lands on the list itself.
+        TestApp.Ensure();
+        var vm = new MainViewModel(new HyperVManage.Services.DemoHyperVService { Delay = TimeSpan.Zero });
+        await vm.RefreshAsync();
+        var window = new MainWindow(vm, demo: true) { WindowStartupLocation = WindowStartupLocation.Manual, Left = 0, Top = 0 };
+        window.Show();
+        window.Activate();
+        Pump();
+        try
+        {
+            vm.Selected = vm.Vms.Single(v => v.Name == "Build Agent");
+            Pump();
+            var list = (ListView)window.FindName("CheckpointList");
+            Assert.True(list.Items.Count > 1);
+            foreach (var key in new[] { Key.Up, Key.Down })
+            {
+                list.SelectedItems.Clear();
+                Pump();
+                list.Focus();
+                Pump();
+                Press(window, key);
+                Assert.True(list.IsKeyboardFocusWithin, $"{key} from the checkpoint list itself moved focus to {Keyboard.FocusedElement}");
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [StaFact(Skip = InputTests.SkipReason, SkipUnless = nameof(InputTests.Enabled), SkipType = typeof(InputTests))]
+    public async Task MainWindow_ArrowsStopAtTheEndsOfTheLists()
+    {
+        // Up on the first row or Down on the last stays put, as in any Windows list; focus must
+        // never wander out to the menu bar or the other list.
+        TestApp.Ensure();
+        var vm = new MainViewModel(new HyperVManage.Services.DemoHyperVService { Delay = TimeSpan.Zero });
+        await vm.RefreshAsync();
+        var window = new MainWindow(vm, demo: true) { WindowStartupLocation = WindowStartupLocation.Manual, Left = 0, Top = 0 };
+        window.Show();
+        window.Activate();
+        Pump();
+        try
+        {
+            vm.Selected = vm.Vms.Single(v => v.Name == "Build Agent");
+            Pump();
+            foreach (var name in new[] { "VmList", "CheckpointList" })
+            {
+                var list = (ListView)window.FindName(name);
+                Assert.True(list.Items.Count > 1, $"{name} needs two rows for this test");
+                foreach (var (start, key) in new[] { (0, Key.Up), (list.Items.Count - 1, Key.Down) })
+                {
+                    list.SelectedIndex = start;
+                    Pump();
+                    ((ListViewItem)list.ItemContainerGenerator.ContainerFromIndex(start)).Focus();
+                    Pump();
+                    for (var i = 0; i < 2; i++)
+                    {
+                        Press(window, key);
+                        var row = Keyboard.FocusedElement as ListViewItem;
+                        Assert.True(row is not null && ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(row), list),
+                            $"{key} at the end of {name} moved focus to {Keyboard.FocusedElement}");
+                        Assert.Equal(start, list.ItemContainerGenerator.IndexFromContainer(row));
+                    }
+                }
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [StaFact(Skip = InputTests.SkipReason, SkipUnless = nameof(InputTests.Enabled), SkipType = typeof(InputTests))]
+    public async Task MainWindow_ArrowsOnTheOnlyVmStayOnIt()
+    {
+        TestApp.Ensure();
+        var vm = new MainViewModel(new HyperVManage.Services.DemoHyperVService { Delay = TimeSpan.Zero });
+        await vm.RefreshAsync();
+        var window = new MainWindow(vm, demo: true) { WindowStartupLocation = WindowStartupLocation.Manual, Left = 0, Top = 0 };
+        window.Show();
+        window.Activate();
+        Pump();
+        try
+        {
+            while (vm.Vms.Count > 1) vm.Vms.RemoveAt(vm.Vms.Count - 1);
+            vm.Selected = vm.Vms[0];
+            Pump();
+            var list = (ListView)window.FindName("VmList");
+            foreach (var key in new[] { Key.Up, Key.Down, Key.Up })
+            {
+                ((ListViewItem)list.ItemContainerGenerator.ContainerFromIndex(0)).Focus();
+                Pump();
+                Press(window, key);
+                Assert.True(Keyboard.FocusedElement is ListViewItem row && ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(row), list),
+                    $"{key} on the only VM moved focus to {Keyboard.FocusedElement}");
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [StaFact(Skip = InputTests.SkipReason, SkipUnless = nameof(InputTests.Enabled), SkipType = typeof(InputTests))]
+    public async Task MainWindow_ArrowsInEmptyListsStayInThem()
+    {
+        // With no VMs, focus is on the list itself: no row to stop on, so WPF would move it to
+        // the nearest control that way, the menu bar above or the checkpoint list below.
+        TestApp.Ensure();
+        var vm = new MainViewModel(new HyperVManage.Services.DemoHyperVService { Delay = TimeSpan.Zero });
+        await vm.RefreshAsync();
+        var window = new MainWindow(vm, demo: true) { WindowStartupLocation = WindowStartupLocation.Manual, Left = 0, Top = 0 };
+        window.Show();
+        window.Activate();
+        Pump();
+        try
+        {
+            vm.Vms.Clear();
+            vm.Selected = null;
+            Pump();
+            foreach (var name in new[] { "VmList", "CheckpointList" })
+            {
+                var list = (ListView)window.FindName(name);
+                Assert.Empty(list.Items);
+                foreach (var key in new[] { Key.Up, Key.Down, Key.Left, Key.Right, Key.Home, Key.End, Key.PageUp, Key.PageDown })
+                {
+                    list.Focus();
+                    Pump();
+                    Press(window, key);
+                    Assert.True(list.IsKeyboardFocused, $"{key} in the empty {name} moved focus to {Keyboard.FocusedElement}");
+                }
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [StaFact(Skip = InputTests.SkipReason, SkipUnless = nameof(InputTests.Enabled), SkipType = typeof(InputTests))]
     public async Task MainWindow_TabGoesFromTheVmsToTheirCheckpoints_WhereDeleteDeletesACheckpoint()
     {
         TestApp.Ensure();

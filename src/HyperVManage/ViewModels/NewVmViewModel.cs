@@ -23,6 +23,17 @@ public sealed partial class NewVmViewModel : ObservableObject
 
     private readonly IIsoHistory _isoHistory;
 
+    /// <summary>Where each build's output is saved, so it can be read after the window has closed
+    /// or sent with a bug report. Null, the default, saves nothing: the window sets it for real
+    /// builds, so neither the demo nor the tests write into the user's folder.</summary>
+    internal string? LogFolder { get; set; }
+
+    public static string DefaultLogFolder { get; } = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HyperVManage", "Logs");
+
+    /// <summary>The file the last build's output was saved to; null until one has been.</summary>
+    public string? LogPath { get; private set; }
+
     /// <summary>The last entry in the Windows ISO list: choosing it opens the file dialog.</summary>
     public const string BrowseChoice = "Browse for an ISO…";
 
@@ -196,15 +207,16 @@ public sealed partial class NewVmViewModel : ObservableObject
             result = BuildOutcome.Failed;
         }
         // Lines posted from the runner's thread land before this, which is posted after them.
-        Post(() => End(result, options.VMName));
+        Post(() => End(result, options));
     }
     private bool CanCreate() => !HasStarted && !IsRunning;
 
     /// <summary>Stops the build. The runner cleans up what it had made, then Finished is raised.</summary>
     public void Stop() => _stop?.Cancel();
 
-    private void End(BuildOutcome result, string name)
+    private void End(BuildOutcome result, NewVmOptions options)
     {
+        var name = options.VMName;
         IsRunning = false;
         _stop?.Dispose();
         _stop = null;
@@ -215,19 +227,51 @@ public sealed partial class NewVmViewModel : ObservableObject
             _ => "The script stopped with an error. The lines above say what went wrong.",
         };
         Append(Outcome);
+        // The whole path is in the box, to arrow to and copy; spoken, it's a string of backslashes.
+        if (SaveLog(options) is { } path)
+            Append($"This output is saved in {path}", spoken: "This output is saved in the Hyper-V Manage Logs folder.");
         Finished?.Invoke(result);
+    }
+
+    /// <summary>Writes the output to a file named for the VM and the time. The script prints the
+    /// password at the end, so that line is blanked out: only that line, since a short password
+    /// blanked wherever its letters turn up would garble the log and give the password away.
+    /// Null if there's nowhere to save it.</summary>
+    private string? SaveLog(NewVmOptions options)
+    {
+        if (LogFolder is null) return null;
+        try
+        {
+            System.IO.Directory.CreateDirectory(LogFolder);
+            var invalid = System.IO.Path.GetInvalidFileNameChars();
+            var safeName = new string(options.VMName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+            var stamp = DateTime.Now.ToString("yyyy-MM-dd HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+            var path = System.IO.Path.Combine(LogFolder, $"New VM {safeName} {stamp}.log");
+            var passwordLine = $"Password: {options.Password}";
+            var lines = LogText.Split(Environment.NewLine)
+                .Select(l => options.Password.Length > 0 && l.Trim() == passwordLine ? l.Replace(passwordLine, "Password: (hidden)") : l);
+            System.IO.File.WriteAllLines(path, lines);
+            return LogPath = path;
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            Append($"Couldn't save this output to a file: {ex.Message}");
+            return null;
+        }
     }
 
     // PowerShell's error records add lines like "At C:\...ps1:123 char:5", "+ throw ..." and
     // "    + CategoryInfo ...". Useful in the log; noise when spoken one by one.
     private static readonly Regex ErrorRecordDetail = new(@"^\s*(At [A-Za-z]:\\|At line:|\+)", RegexOptions.Compiled);
 
-    internal void Append(string line)
+    /// <param name="spoken">What a screen reader says instead of the line; by default, the line.</param>
+    internal void Append(string line, string? spoken = null)
     {
         if (_log.Length > 0) _log.AppendLine();
         _log.Append(line);
         LineAppended?.Invoke(line);
-        if (!string.IsNullOrWhiteSpace(line) && !ErrorRecordDetail.IsMatch(line)) Announce?.Invoke(line);
+        if (spoken is not null) Announce?.Invoke(spoken);
+        else if (!string.IsNullOrWhiteSpace(line) && !ErrorRecordDetail.IsMatch(line)) Announce?.Invoke(line);
     }
 
     private void Post(Action a)

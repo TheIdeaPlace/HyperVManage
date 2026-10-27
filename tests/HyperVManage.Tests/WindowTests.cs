@@ -263,6 +263,8 @@ public class WindowTests
             // This PC's name first, so VMs made on different PCs don't share a name.
             Assert.Equal($"{Environment.MachineName}-Win11-2", ((TextBox)window.FindName("NameBox")).Text);
             Assert.Equal("Progress", UIElementAutomationPeer.CreatePeerForElement((TextBox)window.FindName("LogBox")).GetName());
+            // Read-only, but with a caret: without one, JAWS and NVDA can't arrow through the lines.
+            Assert.True(((TextBox)window.FindName("LogBox")).IsReadOnlyCaretVisible);
         }
         finally { window.Close(); }
     }

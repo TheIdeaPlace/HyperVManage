@@ -160,6 +160,21 @@ public partial class MainWindow : Window
         }, DispatcherPriority.Input);
     }
 
+    /// <summary>
+    /// An arrow or paging key a list can't act on, such as Up with no VMs, when focus is on the
+    /// empty list itself, is moved on by WPF to the nearest control that way: the menu bar above,
+    /// or the other list. Any Windows list keeps them. Taken as the key bubbles up: the list has
+    /// already marked every key it acted on as handled, and WPF moves focus only once the key is
+    /// through.
+    /// </summary>
+    private void List_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Handled) return;
+        if (e.Key is not (Key.Up or Key.Down or Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown)) return;
+        if ((Keyboard.Modifiers & ModifierKeys.Alt) != 0) return;
+        e.Handled = true;
+    }
+
     private void VmList_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (Keyboard.Modifiers != ModifierKeys.None) return;
@@ -298,6 +313,7 @@ public partial class MainWindow : Window
         }
         var newVm = new NewVmViewModel(_vm.Vms.Select(v => v.Name), _isoHistory, ubuntu);
         if (_demo) newVm.RunScript = Services.DemoNewVmScript.RunAsync;
+        else newVm.LogFolder = NewVmViewModel.DefaultLogFolder;
         // async void, as an event handler is: everything in it is caught, so nothing can end the app.
         newVm.Finished += async outcome =>
         {

@@ -116,8 +116,10 @@
             </StackPanel>
             <Label DockPanel.Dock="Top" Content="Pro_gress:" Target="{Binding ElementName=LogBox}" Padding="0,0,0,2"/>
             <!-- Filled from code a line at a time (AppendText), not bound: replacing the whole text
-                 on every line would throw the caret back to the top while someone reads. -->
-            <TextBox x:Name="LogBox" AutomationProperties.Name="Progress" IsReadOnly="True"
+                 on every line would throw the caret back to the top while someone reads.
+                 The caret must show even though it's read-only: without one, JAWS and NVDA have
+                 nothing to follow, and the arrows don't read the lines. -->
+            <TextBox x:Name="LogBox" AutomationProperties.Name="Progress" IsReadOnly="True" IsReadOnlyCaretVisible="True"
                      TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AcceptsReturn="True"/>
         </DockPanel>
     </Grid>
