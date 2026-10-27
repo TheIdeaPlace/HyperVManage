@@ -340,9 +340,8 @@ progress bars, no pop-up dialogs.
    own `bcdboot.exe /f UEFI`. It then sets the store's devices to `boot`
    and `locate`. bcdboot records the host's view of the mounted VHDX, which
    the VM can't find (0xc000000e); Convert-WindowsImage makes the same fix.
-   If bcdboot fails with 0xc0000035, the script builds the boot files and
+   If bcdboot fails, the script says how and builds the boot files and
    store by hand; see [The boot-store fallback](#the-boot-store-fallback).
-   Any other bcdboot failure stops the script with bcdboot's own message.
 6. Writes `\Windows\Panther\unattend.xml`, which has only the `specialize`
    and `oobeSystem` passes. It then switches the first partition's GPT type
    to EFI System and dismounts everything. If this stage fails, the
@@ -412,11 +411,13 @@ it" appears only for the fallback.
 
 ### The boot-store fallback
 
-On the 26340 Insider host, `bcdboot /s` fails with exit code 183 and
+On the 26340 Insider host, `bcdboot /s` fails with exit code 183 (0x000000B7) and
 `Failed to create a new system store. Status = [c0000035]`. It loads the new
 store under `HKLM\BCD00000000`, the key the host's own store already uses.
-`/offline` and `/nofirmwaresync` don't help. So when bcdboot fails with
-c0000035, the script does its job by hand. Each step below fixes a failure seen while testing:
+`/offline` and `/nofirmwaresync` don't help. On another PC, the bcdboot from a
+26300 ISO failed with 0xc0e90002 (it couldn't copy the boot files) and printed
+nothing. So whenever bcdboot fails, the script does its job by hand. Each step
+below fixes a failure seen while testing:
 
 1. Copies `Windows\Boot\EFI` and `Fonts` from the applied image to
    `\EFI\Microsoft\Boot`, and `bootmgfw.efi` to `\EFI\Boot\boot<arch>.efi`.

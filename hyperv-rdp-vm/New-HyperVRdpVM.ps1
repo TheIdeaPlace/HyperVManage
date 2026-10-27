@@ -1533,7 +1533,10 @@ try {
     $efiBoot = "${sysLetter}:\EFI\Microsoft\Boot"
     function Invoke-Bcdedit([string]$Arguments) {
         $out = cmd /c "bcdedit $Arguments 2>&1" | Out-String
-        if ($LASTEXITCODE -ne 0) { throw "bcdedit $Arguments failed: $($out.Trim()) (bcdboot said: $($bootOutput.Trim()))" }
+        if ($LASTEXITCODE -ne 0) {
+            $said = if ($out.Trim()) { ": $($out.Trim() -replace '\s*\r?\n\s*', ' ')" } else { ', and said nothing' }
+            throw ("bcdedit $Arguments failed (exit code {0}, 0x{0:X8}){1}" -f $LASTEXITCODE, $said)
+        }
         return $out
     }
     # "partition=X:" (or a reference through the VHDX file) records this PC's
@@ -1541,11 +1544,14 @@ try {
     # Manager with 0xc000000e. "boot" and "locate" are resolved at boot time.
     $portableDevices = @('device locate', 'osdevice locate')
 
-    # bcdboot loads the new boot store under the same registry key as this PC's
-    # own, and on some builds (seen on 26340 Insider) that collides and it fails
-    # with 0xc0000035. Only then, build the same boot files and store by hand:
-    # bcdedit /createstore loads the store under a key of its own. Any other
-    # bcdboot failure is a real problem, so it stops the script.
+    # bcdboot can fail in ways that have nothing to do with the disk. It loads
+    # the new boot store under the same registry key as this PC's own, and on
+    # some builds (seen on 26340 Insider) that collides: 0xc0000035. The ISO's
+    # bcdboot run on a PC of another build can fail to copy the boot files,
+    # 0xc0e90002, without a word of output (seen with a 26300 ISO). So when it
+    # fails for any reason, build the same boot files and store by hand:
+    # bcdedit /createstore loads the store under a key of its own, and a real
+    # problem with the disk stops the script there instead, with its own error.
     $bootOutput = cmd /c "`"${winLetter}:\Windows\System32\bcdboot.exe`" ${winLetter}:\Windows /s ${sysLetter}: /f UEFI 2>&1" | Out-String
     $bootExit = $LASTEXITCODE
     if ($bootExit -eq 0) {
@@ -1553,10 +1559,16 @@ try {
         foreach ($setting in $portableDevices) {
             Invoke-Bcdedit "/store `"$efiBoot\BCD`" /set {default} $setting" | Out-Null
         }
-    } elseif ($bootOutput -notmatch 'c0000035') {
-        throw "bcdboot couldn't make the disk bootable (exit code $bootExit): $($bootOutput.Trim())"
     } else {
-        Say "bcdboot couldn't do it (exit code $bootExit), so the boot files are being set up directly instead."
+        # On one line, so it reads as one sentence in the progress box and the log.
+        $bootSaid = if ($bootOutput.Trim()) { ": $($bootOutput.Trim() -replace '\s*\r?\n\s*', ' ')" } else { ', and said nothing' }
+        $bootFailure = "bcdboot couldn't do it (exit code {0}, 0x{0:X8}){1}" -f $bootExit, $bootSaid
+        # Without the image's own boot manager there's nothing to set up by hand;
+        # say so here, not later as a missing file on the VM's boot partition.
+        if (-not (Test-Path -LiteralPath "${winLetter}:\Windows\Boot\EFI\bootmgfw.efi")) {
+            throw "$bootFailure. The Windows image has no UEFI boot files (Windows\Boot\EFI\bootmgfw.efi), so the disk can't be made bootable. Try another ISO."
+        }
+        Say "$bootFailure, so the boot files are being set up directly instead."
         # Start clean: the failed bcdboot can leave a partial BCD store behind.
         Remove-Item -LiteralPath "${sysLetter}:\EFI" -Recurse -Force -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Path $efiBoot, "${sysLetter}:\EFI\Boot" -Force | Out-Null

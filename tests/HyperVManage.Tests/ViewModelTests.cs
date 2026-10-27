@@ -500,7 +500,7 @@ public class NewVmViewModelTests
             n.Announce += said.Add;
             n.RunScript = (_, onLine, _) =>
             {
-                onLine("bcdboot couldn't make the disk bootable (exit code 1): Failure when attempting to copy boot files.");
+                onLine(@"The Windows image has no UEFI boot files (Windows\Boot\EFI\bootmgfw.efi), so the disk can't be made bootable. Try another ISO.");
                 onLine("User name: vmuser");
                 onLine("Password: vm");
                 return Task.FromResult(BuildOutcome.Failed);
@@ -511,7 +511,7 @@ public class NewVmViewModelTests
             Assert.Equal(file, n.LogPath);
             Assert.StartsWith("New VM Test5 ", Path.GetFileName(file));
             var saved = File.ReadAllText(file);
-            Assert.Contains("bcdboot couldn't make the disk bootable", saved);
+            Assert.Contains("so the disk can't be made bootable", saved);
             Assert.Contains("stopped with an error", saved);
             Assert.Contains("User name: vmuser", saved);
             Assert.Contains("Password: (hidden)", saved);
