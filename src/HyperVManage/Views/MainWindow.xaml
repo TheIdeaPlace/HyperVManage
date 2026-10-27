@@ -93,6 +93,7 @@
                       SelectionMode="Single"
                       AutomationProperties.Name="Virtual machines"
                       PreviewKeyDown="VmList_PreviewKeyDown"
+                      KeyDown="List_KeyDown"
                       MouseDoubleClick="VmList_MouseDoubleClick">
                 <ListView.ItemContainerStyle>
                     <Style TargetType="ListViewItem">
@@ -153,6 +154,7 @@
                       SelectionMode="Extended"
                       AutomationProperties.Name="{Binding CheckpointsListName}"
                       PreviewKeyDown="CheckpointList_PreviewKeyDown"
+                      KeyDown="List_KeyDown"
                       SelectionChanged="CheckpointList_SelectionChanged"
                       GotKeyboardFocus="CheckpointList_GotKeyboardFocus">
                 <ListView.ItemContainerStyle>

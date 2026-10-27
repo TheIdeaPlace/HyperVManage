@@ -487,6 +487,71 @@ public class NewVmViewModelTests
     }
 
     [Fact]
+    public async Task Create_SavesTheOutputToAFile_WithThePasswordHidden()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"HyperVManageLogTest-{Guid.NewGuid():N}");
+        try
+        {
+            var n = Ready("Test5");
+            // Short, and inside other words: only the line the script prints it on is blanked.
+            n.Password = "vm";
+            n.LogFolder = folder;
+            var said = new List<string>();
+            n.Announce += said.Add;
+            n.RunScript = (_, onLine, _) =>
+            {
+                onLine("bcdboot couldn't make the disk bootable (exit code 1): Failure when attempting to copy boot files.");
+                onLine("User name: vmuser");
+                onLine("Password: vm");
+                return Task.FromResult(BuildOutcome.Failed);
+            };
+            await n.CreateCommand.ExecuteAsync(null);
+
+            var file = Assert.Single(Directory.GetFiles(folder));
+            Assert.Equal(file, n.LogPath);
+            Assert.StartsWith("New VM Test5 ", Path.GetFileName(file));
+            var saved = File.ReadAllText(file);
+            Assert.Contains("bcdboot couldn't make the disk bootable", saved);
+            Assert.Contains("stopped with an error", saved);
+            Assert.Contains("User name: vmuser", saved);
+            Assert.Contains("Password: (hidden)", saved);
+            Assert.DoesNotContain("Password: vm", saved);
+            // The window says where, as its last line; spoken without the path.
+            Assert.EndsWith($"This output is saved in {file}", n.LogText);
+            Assert.Equal("This output is saved in the Hyper-V Manage Logs folder.", said[^1]);
+        }
+        finally { if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true); }
+    }
+
+    [Fact]
+    public async Task Create_SaysSo_WhenTheOutputCantBeSaved()
+    {
+        // A file where the folder should be: the folder can't be made.
+        var blocker = Path.GetTempFileName();
+        try
+        {
+            var n = Ready("Test6");
+            n.LogFolder = blocker;
+            n.RunScript = (_, _, _) => Task.FromResult(BuildOutcome.Failed);
+            await n.CreateCommand.ExecuteAsync(null);
+            Assert.Null(n.LogPath);
+            Assert.Contains("Couldn't save this output to a file", n.LogText);
+            Assert.Contains("stopped with an error", n.Outcome);
+        }
+        finally { File.Delete(blocker); }
+    }
+
+    [Fact]
+    public async Task Create_SavesNothing_UnlessGivenAFolder()
+    {
+        var n = Ready("Test7");
+        n.RunScript = (_, _, _) => Task.FromResult(BuildOutcome.Succeeded);
+        await n.CreateCommand.ExecuteAsync(null);
+        Assert.Null(n.LogPath);
+        Assert.DoesNotContain("saved in", n.LogText);
+    }
+
+    [Fact]
     public async Task Create_ReportsAFailure_WithoutSpeakingPowerShellsErrorClutter()
     {
         var n = Ready("Test4");

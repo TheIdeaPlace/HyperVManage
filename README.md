@@ -98,8 +98,10 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
   share one. Then
   the script's own progress as it
   runs, one line at a time, each one also spoken (PowerShell's own error detail lines stay in the
-  log but aren't read out). Closing the window during a build stops it and cleans up what it had
-  made: the ISO and disk are unmounted and the half-built disk deleted. If it had already got as
+  log but aren't read out). The arrow keys read back through the lines at any time. When the build
+  ends, its output is also saved to `%LOCALAPPDATA%\HyperVManage\Logs`, in a file named for the VM
+  and the time, with the password line blanked out. Closing the window during a build stops it
+  and cleans up what it had made: the ISO and disk are unmounted and the half-built disk deleted. If it had already got as
   far as creating the VM, that VM is left in the list to delete. The main window won't close
   while a build runs.
   New Virtual Machine and the screenshot viewers are windows of their own, so Alt+Tab moves
