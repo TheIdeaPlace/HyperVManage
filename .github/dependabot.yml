@@ -1,0 +1,46 @@
+version: 2
+updates:
+  # Versions of the actions used in .github/workflows/*.yml.
+  #
+  # Grouped deliberately: a runtime-wide move like the Node 20 -> 24
+  # migration touches every action at once, and ungrouped that arrives as
+  # one PR per action. As a single PR it is one review and one merge, and
+  # the workflows never sit half-migrated between merges.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The app and its tests, in one entry so a package that both reference
+  # (and the test stack) moves everywhere in one PR. The UI is WPF, which
+  # comes with the .NET SDK rather than from NuGet, so there is no UI toolkit
+  # package to split out here.
+  #
+  # Velopack has a group of its own: release.yml installs the vpk tool at
+  # VPK_VERSION, which must match the Velopack package the app references.
+  # Dependabot cannot change that line, so a Velopack PR needs VPK_VERSION
+  # bumped in the same PR before it merges, and should never ride along with
+  # routine updates.
+  - package-ecosystem: nuget
+    directories:
+      - "/src/HyperVManage"
+      - "/tests/HyperVManage.Tests"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+    groups:
+      velopack:
+        patterns:
+          - "Velopack"
+      nuget:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "Velopack"
