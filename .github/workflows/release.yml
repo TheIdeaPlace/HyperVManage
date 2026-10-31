@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -251,7 +251,7 @@ jobs:
           if ($bad) { throw "$bad file(s) aren't validly signed and timestamped." }
 
       - name: Keep the build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hyperv-manage-${{ env.Version }}${{ env.SIGN != 'true' && '-unsigned' || '' }}
           path: |
