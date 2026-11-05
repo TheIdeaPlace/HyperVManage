@@ -84,9 +84,9 @@ public sealed class PowerShellHyperVService : IHyperVService
             var startup = wanted.MemoryStartupMB * 1024L * 1024L;
             lines.Add(wanted.DynamicMemory
                 // Keep the range the script sets up: from 2 GB (or less, if startup is smaller)
-                // to twice startup, at least 8 GB.
+                // to 2 GB over startup, at least 6 GB.
                 ? $"Set-VMMemory -VM $vm -DynamicMemoryEnabled $true -StartupBytes {startup} " +
-                  $"-MinimumBytes {Math.Min(startup, 2048L * 1024 * 1024)} -MaximumBytes {Math.Max(startup * 2, 8192L * 1024 * 1024)}"
+                  $"-MinimumBytes {Math.Min(startup, 2048L * 1024 * 1024)} -MaximumBytes {Math.Max(startup + 2048L * 1024 * 1024, 6144L * 1024 * 1024)}"
                 : $"Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes {startup}");
         }
         if (wanted.SwitchName != current.SwitchName)

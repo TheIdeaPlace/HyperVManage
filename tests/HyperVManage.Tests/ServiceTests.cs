@@ -173,9 +173,29 @@ public class ScriptBuildingTests
             Current with { ProcessorCount = 2, MemoryStartupMB = 8192, AutomaticStartAction = "Start", AutomaticCheckpoints = true });
         Assert.Contains("Set-VMProcessor -VM $vm -Count 2", script);
         Assert.Contains($"-StartupBytes {8192L * 1024 * 1024}", script);
-        Assert.Contains($"-MaximumBytes {16384L * 1024 * 1024}", script);
+        Assert.Contains($"-MaximumBytes {10240L * 1024 * 1024}", script);
         Assert.Contains("Set-VM -VM $vm -AutomaticStartAction Start", script);
         Assert.Contains("-AutomaticCheckpointsEnabled $true", script);
+    }
+
+    // The same range New-HyperVRdpVM.ps1 sets up: 2 GB over startup, at least 6 GB.
+    [Theory]
+    [InlineData(2048, 6144)]
+    [InlineData(4096, 6144)]
+    [InlineData(5120, 7168)]
+    [InlineData(8192, 10240)]
+    public void Settings_MemoryCanGrowTwoGBOverStartup_AtLeastSixGB(int startupMB, long maximumMB)
+    {
+        var script = PowerShellHyperVService.BuildSettingsScript("id-1", Current with { MemoryStartupMB = 1024 },
+            Current with { MemoryStartupMB = startupMB });
+        Assert.Contains($"-MaximumBytes {maximumMB * 1024 * 1024}", script);
+    }
+
+    [Fact]
+    public void NewVmScript_MemoryCanGrowTwoGBOverStartup_AtLeastSixGB()
+    {
+        var script = File.ReadAllText(Path.Combine(RepoRoot(), "hyperv-rdp-vm", "New-HyperVRdpVM.ps1"));
+        Assert.Contains("[Math]::Max($MemoryGB + 2, 6)", script);
     }
 
     [Fact]

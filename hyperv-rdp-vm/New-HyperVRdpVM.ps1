@@ -508,7 +508,7 @@ function Add-NetworkSwitch([string[]]$RemoveOnFailure) {
 function New-BaseVM([switch]$Later) {
     New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ([int64]$MemoryGB * 1GB) -VHDPath $vhdPath -SwitchName $SwitchName | Out-Null
     Set-VMProcessor -VMName $VMName -Count $ProcessorCount
-    Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes 2GB -StartupBytes ([int64]$MemoryGB * 1GB) -MaximumBytes ([int64][Math]::Max($MemoryGB * 2, 8) * 1GB)
+    Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes 2GB -StartupBytes ([int64]$MemoryGB * 1GB) -MaximumBytes ([int64][Math]::Max($MemoryGB + 2, 6) * 1GB)
     Set-VM -Name $VMName -AutomaticCheckpointsEnabled $false
     if ($Later) {
         Set-VM -Name $VMName -AutomaticStartAction Nothing
