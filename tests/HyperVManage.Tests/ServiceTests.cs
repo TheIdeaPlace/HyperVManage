@@ -173,9 +173,58 @@ public class ScriptBuildingTests
             Current with { ProcessorCount = 2, MemoryStartupMB = 8192, AutomaticStartAction = "Start", AutomaticCheckpoints = true });
         Assert.Contains("Set-VMProcessor -VM $vm -Count 2", script);
         Assert.Contains($"-StartupBytes {8192L * 1024 * 1024}", script);
-        Assert.Contains($"-MaximumBytes {16384L * 1024 * 1024}", script);
+        Assert.Contains($"[int64]{10240L * 1024 * 1024}", script);
         Assert.Contains("Set-VM -VM $vm -AutomaticStartAction Start", script);
         Assert.Contains("-AutomaticCheckpointsEnabled $true", script);
+    }
+
+    // The same range New-HyperVRdpVM.ps1 sets up: 2 GB over startup, at least 6 GB.
+    [Theory]
+    [InlineData(2048, 6144)]
+    [InlineData(4096, 6144)]
+    [InlineData(5120, 7168)]
+    [InlineData(8192, 10240)]
+    public void Settings_TurningDynamicMemoryOn_GrowsTwoGBOverStartup_AtLeastSixGB(int startupMB, long maximumMB)
+    {
+        var script = PowerShellHyperVService.BuildSettingsScript("id-1", Current with { MemoryStartupMB = 1024, DynamicMemory = false },
+            Current with { MemoryStartupMB = startupMB });
+        Assert.Contains($"-MaximumBytes {maximumMB * 1024 * 1024}", script);
+        Assert.DoesNotContain("MemoryMaximum", script);
+    }
+
+    [Fact]
+    public void Settings_AlreadyDynamic_NeverLowersTheMaximum()
+    {
+        var script = PowerShellHyperVService.BuildSettingsScript("id-1", Current, Current with { MemoryStartupMB = 5120 });
+        Assert.Contains($"-MaximumBytes ([Math]::Max([int64]$vm.MemoryMaximum, [int64]{7168L * 1024 * 1024}))", script);
+    }
+
+    [Theory]
+    [InlineData(8L * 1024 * 1024 * 1024, 8L * 1024 * 1024 * 1024)]    // a VM on the old 4 / 8 GB, raised to 5: stays 8
+    [InlineData(6L * 1024 * 1024 * 1024, 7L * 1024 * 1024 * 1024)]    // on 4 / 6 GB, raised to 5: grows to 7
+    public void Settings_AlreadyDynamic_MaximumWorksInPowerShell(long existing, long expected)
+    {
+        var script = PowerShellHyperVService.BuildSettingsScript("id-1", Current, Current with { MemoryStartupMB = 5120 });
+        var expression = System.Text.RegularExpressions.Regex.Match(script, @"-MaximumBytes (\(\[Math\].*?\)\))").Groups[1].Value;
+        var start = new System.Diagnostics.ProcessStartInfo("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", $"$vm = [pscustomobject]@{{ MemoryMaximum = {existing} }}; {expression}"]) { RedirectStandardOutput = true, UseShellExecute = false };
+        using var process = System.Diagnostics.Process.Start(start)!;
+        var output = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        Assert.Equal(expected.ToString(), output);
+    }
+
+    [Fact]
+    public void Settings_SmallStartup_MinimumFollowsIt()
+    {
+        var script = PowerShellHyperVService.BuildSettingsScript("id-1", Current, Current with { MemoryStartupMB = 1024 });
+        Assert.Contains($"-MinimumBytes {1024L * 1024 * 1024} ", script);
+    }
+
+    [Fact]
+    public void NewVmScript_MemoryCanGrowTwoGBOverStartup_AtLeastSixGB()
+    {
+        var script = File.ReadAllText(Path.Combine(RepoRoot(), "hyperv-rdp-vm", "New-HyperVRdpVM.ps1"));
+        Assert.Contains("-MaximumBytes ([int64][Math]::Max($MemoryGB + 2, 6) * 1GB)", script);
     }
 
     [Fact]
