@@ -82,11 +82,15 @@ public sealed class PowerShellHyperVService : IHyperVService
         if (wanted.MemoryStartupMB != current.MemoryStartupMB || wanted.DynamicMemory != current.DynamicMemory)
         {
             var startup = wanted.MemoryStartupMB * 1024L * 1024L;
+            var maximum = Math.Max(startup + 2048L * 1024 * 1024, 6144L * 1024 * 1024);
             lines.Add(wanted.DynamicMemory
                 // Keep the range the script sets up: from 2 GB (or less, if startup is smaller)
-                // to 2 GB over startup, at least 6 GB.
+                // to 2 GB over startup, at least 6 GB. A VM already using dynamic memory keeps a higher
+                // maximum, so asking for more memory never lowers its ceiling. A VM turning it on has
+                // no maximum of its own to keep.
                 ? $"Set-VMMemory -VM $vm -DynamicMemoryEnabled $true -StartupBytes {startup} " +
-                  $"-MinimumBytes {Math.Min(startup, 2048L * 1024 * 1024)} -MaximumBytes {Math.Max(startup + 2048L * 1024 * 1024, 6144L * 1024 * 1024)}"
+                  $"-MinimumBytes {Math.Min(startup, 2048L * 1024 * 1024)} -MaximumBytes " +
+                  (current.DynamicMemory ? $"([Math]::Max([int64]$vm.MemoryMaximum, [int64]{maximum}))" : $"{maximum}")
                 : $"Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes {startup}");
         }
         if (wanted.SwitchName != current.SwitchName)

@@ -191,7 +191,7 @@ Start-VM SURFACEPRO7-Win11
 | `-UserName`       | vmuser                 | Windows account name                           |
 | `-Password`       | vmadmin                | Windows account password                       |
 | `-ProcessorCount` | 4                      | Virtual processors                             |
-| `-MemoryGB`       | 4                      | Starting memory, at least 2; it can grow by 2 GB more than this, to at least 6 GB |
+| `-MemoryGB`       | 4                      | Starting memory, at least 2; it can grow to 2 GB above this, or to 6 GB if that's more |
 | `-DiskGB`         | 128, or 64 for Ubuntu  | Virtual disk size; Ubuntu needs at least 32    |
 | `-SwitchName`     | an external switch     | Hyper-V virtual switch. Left out, the VM joins your network through an external switch, created if there isn't one |
 | `-HostOnly`       | off                    | Use the Default Switch: only this PC can reach the VM |
