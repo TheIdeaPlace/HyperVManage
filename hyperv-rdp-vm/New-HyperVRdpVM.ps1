@@ -182,8 +182,8 @@ function Assert-Room([uint64]$Needed, [string]$What, [string]$Folder, [Nullable[
         # Whole numbers, needed rounded up and free down, so the two never sound the same.
         $neededGB = [Math]::Ceiling($Needed / 1GB)
         $freeGB = [Math]::Floor($Free / 1GB)
-        throw ("$What needs about {0} GB free for the VM's disk, in {1}, and there's only {2} GB there. Make room, or choose another folder for virtual hard disks in Hyper-V Settings (or with -VhdFolder), and run the script again." -f
-            $neededGB, $Folder, $freeGB)
+        throw ("{0} needs about {1} GB free for the VM's disk, in {2}, and there's only {3} GB there. Make room, or choose another folder for virtual hard disks in Hyper-V Settings (or with -VhdFolder), and run the script again." -f
+            $What, $neededGB, $Folder, $freeGB)
     }
 }
 

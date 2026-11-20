@@ -45,8 +45,10 @@ bars.
   script works on both kinds of PC: it reads the processor type and sets up the
   VM to match. If Downloads holds both kinds of ISO, it skips the one whose
   file name says it's for the other processor.
-- About 20 GB of free disk space. The virtual disk is 128 GB but only grows as
-  it fills.
+- Free disk space where Hyper-V keeps virtual hard disks: about 30 GB for
+  Windows 11, 33 GB for Windows Server with the desktop, 20 GB for Ubuntu.
+  The virtual disk is 128 GB but only grows as it fills. The build checks
+  before it starts.
 
 ## Running it
 
@@ -334,7 +336,8 @@ progress bars, no pop-up dialogs.
    the index whose `ImageName` equals `-Edition`. It then checks the drive
    holding the VM's disk has room for the image's own size plus 10 GB for
    first-run setup (about 29 GB for Windows 11 Pro, 33 GB for Windows Server
-   with the desktop), and stops there if not. Without the check, a drive
+   with the desktop), and stops there if not. If the room can't be measured,
+   it says so and goes on. Without the check, a drive
    that fills during the copy fails 15 minutes in with "The device is not
    ready".
 4. Creates a dynamic VHDX, mounts it, and initialises it as GPT. Any

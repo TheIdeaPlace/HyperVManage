@@ -52,6 +52,14 @@ public class DiskSpaceTests
     }
 
     [Fact]
+    public async Task ANameWithBraces_StillGetsThePlainMessage()
+    {
+        var ex = await Assert.ThrowsAsync<HyperVException>(() =>
+            Run($"Assert-Room -Needed 20GB -What 'Odd {{0}} name' -Folder 'D:\\VMs' -Free {GB(5)}"));
+        Assert.StartsWith("Odd {0} name needs about 20 GB free", ex.Message);
+    }
+
+    [Fact]
     public async Task EnoughRoom_GoesAhead_SayingNothing()
     {
         Assert.Equal("", (await Check(23, 120)).Trim());
