@@ -84,7 +84,25 @@ public partial class NewVmWindow : Window
                 Close();
             }
         };
-        IsoBox.DropDownOpened += (_, _) => _isoToRestore = _vm.IsoPath == NewVmViewModel.BrowseChoice ? _isoToRestore : _vm.IsoPath;
+        IsoBox.DropDownOpened += (_, _) =>
+        {
+            _isoToRestore = _vm.IsoPath == NewVmViewModel.BrowseChoice ? _isoToRestore : _vm.IsoPath;
+            _vm.HoldEditionReads = true;
+        };
+        // The suggested name follows the edition (-Win11 or -Server), perhaps a moment after the
+        // window opens with the name selected to type over. If it changes under focus, it stays
+        // selected, so typing still replaces it, and the new name is said.
+        vm.PropertyChanging += (_, e) =>
+        {
+            if (e.PropertyName == nameof(NewVmViewModel.VmName))
+                _nameWasSelected = NameBox.IsKeyboardFocused && NameBox.Text.Length > 0 && NameBox.SelectionLength == NameBox.Text.Length;
+        };
+        vm.NameSuggested += name =>
+        {
+            if (!NameBox.IsKeyboardFocused) return;
+            if (_nameWasSelected) Dispatcher.BeginInvoke(() => NameBox.SelectAll(), System.Windows.Threading.DispatcherPriority.Input);
+            Announcer.Announce(this, $"Name: {name}");
+        };
         IsoBox.IsKeyboardFocusWithinChanged += (_, e) =>
         {
             // Arrowed onto Browse in the closed box and then left: it wasn't chosen, so the ISO comes back.
@@ -93,6 +111,7 @@ public partial class NewVmWindow : Window
     }
 
     private bool _escapingList;
+    private bool _nameWasSelected;
 
     private void FocusName()
     {
@@ -198,6 +217,8 @@ public partial class NewVmWindow : Window
         _escapingList = false;
         if (restore) _vm.IsoPath = _isoToRestore;
         SyncIsoSelection();
+        // Now the ISO left chosen is read, once. Choosing Browse reads the file it picks instead.
+        _vm.HoldEditionReads = false;
     }
 
     /// <summary>From choosing Browse until its dialog closes.</summary>

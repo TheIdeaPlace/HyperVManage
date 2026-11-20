@@ -10,16 +10,21 @@ namespace HyperVManage.Tests;
 /// build gives Server so it sets itself up without stopping.</summary>
 public sealed class ServerEditionTests : IDisposable
 {
-    private static readonly string[] Win11 =
-        ["Windows 11 Home", "Windows 11 Home N", "Windows 11 Education", "Windows 11 Pro", "Windows 11 Pro N"];
+    internal static WindowsEdition Client(string name) => new(name, name, "Client");
 
-    private static readonly string[] Server2025 =
+    internal static readonly WindowsEdition[] Win11 =
+        [.. new[] { "Windows 11 Home", "Windows 11 Home N", "Windows 11 Education", "Windows 11 Pro", "Windows 11 Pro N" }.Select(Client)];
+
+    // As on the real Windows Server 2025 Evaluation ISO.
+    internal static readonly WindowsEdition[] Server2025 =
     [
-        "Windows Server 2025 Standard Evaluation",
-        "Windows Server 2025 Standard Evaluation (Desktop Experience)",
-        "Windows Server 2025 Datacenter Evaluation",
-        "Windows Server 2025 Datacenter Evaluation (Desktop Experience)",
+        new("Windows Server 2025 Standard Evaluation", "Windows Server 2025 SERVERSTANDARDCORE", "Server Core"),
+        new("Windows Server 2025 Standard Evaluation (Desktop Experience)", "Windows Server 2025 SERVERSTANDARD", "Server"),
+        new("Windows Server 2025 Datacenter Evaluation", "Windows Server 2025 SERVERDATACENTERCORE", "Server Core"),
+        new("Windows Server 2025 Datacenter Evaluation (Desktop Experience)", "Windows Server 2025 SERVERDATACENTER", "Server"),
     ];
+
+    internal static string[] Shown(IEnumerable<WindowsEdition> editions) => [.. editions.Select(e => e.DisplayName)];
 
     private readonly string _dir = Directory.CreateTempSubdirectory("hvm-editions-").FullName;
 
@@ -35,15 +40,17 @@ public sealed class ServerEditionTests : IDisposable
     // --- Choosing an edition --------------------------------------------------------------
 
     [Fact]
-    public void Choose_KeepsTheCurrentEdition_InTheIsosOwnSpelling()
+    public void Choose_KeepsTheCurrentEdition_ByEitherName_GivingTheDisplayName()
     {
-        Assert.Equal("Windows 11 Education", WindowsEditions.Choose(Win11, "windows 11 education "));
+        Assert.Equal("Windows 11 Education", WindowsEditions.Choose(Win11, "windows 11 education ")?.DisplayName);
+        Assert.Equal("Windows Server 2025 Standard Evaluation (Desktop Experience)",
+            WindowsEditions.Choose(Server2025, "Windows Server 2025 SERVERSTANDARD")?.DisplayName);
     }
 
     [Fact]
     public void Choose_PrefersPro_OnAWindows11Iso()
     {
-        Assert.Equal("Windows 11 Pro", WindowsEditions.Choose(Win11, "Something else"));
+        Assert.Equal("Windows 11 Pro", WindowsEditions.Choose(Win11, "Something else")?.DisplayName);
     }
 
     [Fact]
@@ -51,34 +58,51 @@ public sealed class ServerEditionTests : IDisposable
     {
         // Datacenter can run any number of VMs under Hyper-V; Core has no desktop or Narrator.
         Assert.Equal("Windows Server 2025 Datacenter Evaluation (Desktop Experience)",
-            WindowsEditions.Choose(Server2025, "Windows 11 Pro"));
+            WindowsEditions.Choose(Server2025, "Windows 11 Pro")?.DisplayName);
         Assert.Equal("Windows Server 2025 Standard Evaluation (Desktop Experience)",
-            WindowsEditions.Choose([Server2025[0], Server2025[1]], "Windows 11 Pro"));
+            WindowsEditions.Choose([Server2025[0], Server2025[1]], "Windows 11 Pro")?.DisplayName);
+    }
+
+    [Fact]
+    public void Choose_WorksOnAnIsoInAnotherLanguage()
+    {
+        // The display names are translated; the image's own name and type aren't.
+        WindowsEdition[] german =
+        [
+            new("Windows Server 2025 Standard Evaluation", "Windows Server 2025 SERVERSTANDARDCORE", "Server Core"),
+            new("Windows Server 2025 Standard Evaluation (Desktopdarstellung)", "Windows Server 2025 SERVERSTANDARD", "Server"),
+            new("Windows Server 2025 Datacenter Evaluation", "Windows Server 2025 SERVERDATACENTERCORE", "Server Core"),
+            new("Windows Server 2025 Datacenter Evaluation (Desktopdarstellung)", "Windows Server 2025 SERVERDATACENTER", "Server"),
+        ];
+        Assert.Equal("Windows Server 2025 Datacenter Evaluation (Desktopdarstellung)", WindowsEditions.Choose(german, "")?.DisplayName);
+        Assert.Equal("Windows 11 Pro", WindowsEditions.Choose(
+            [new("Windows 11 Famille", "Windows 11 Home", "Client"), new("Windows 11 Professionnel", "Windows 11 Pro", "Client")], "")?.Name);
     }
 
     [Fact]
     public void Choose_AvoidsHome_UnlessThatsAllThereIs()
     {
-        Assert.Equal("Windows 11 Education", WindowsEditions.Choose(["Windows 11 Home", "Windows 11 Education"], ""));
-        Assert.Equal("Windows 11 Home", WindowsEditions.Choose(["Windows 11 Home"], ""));
+        Assert.Equal("Windows 11 Education", WindowsEditions.Choose([Client("Windows 11 Home"), Client("Windows 11 Education")], "")?.DisplayName);
+        Assert.Equal("Windows 11 Home", WindowsEditions.Choose([Client("Windows 11 Home")], "")?.DisplayName);
         Assert.Null(WindowsEditions.Choose([], "Windows 11 Pro"));
     }
 
-    [Theory]
-    [InlineData("Windows 11 Pro", false, false)]
-    [InlineData("Windows Server 2025 Datacenter Evaluation", true, true)]
-    [InlineData("Windows Server 2025 Datacenter Evaluation (Desktop Experience)", true, false)]
-    public void ServerAndCore_AreToldApartByName(string edition, bool server, bool core)
+    [Fact]
+    public void ServerAndCore_AreToldApartByType()
     {
-        Assert.Equal(server, WindowsEditions.IsServer(edition));
-        Assert.Equal(core, WindowsEditions.IsServerCore(edition));
+        Assert.False(Client("Windows 11 Pro").IsServer);
+        Assert.True(Server2025[0].IsServer && Server2025[0].IsServerCore);
+        Assert.True(Server2025[1].IsServer && !Server2025[1].IsServerCore);
     }
 
     [Fact]
-    public void Parse_TakesOneNamePerLine_SkippingBlanksAndRepeats()
+    public void Parse_TakesTypeNameAndDisplayName_SkippingBlanksAndRepeats()
     {
-        Assert.Equal(["Windows 11 Home", "Windows 11 Pro"],
-            WindowsEditions.Parse("Windows 11 Home\r\n\r\nWindows 11 Pro\r\nwindows 11 pro\r\n"));
+        var editions = WindowsEditions.Parse(
+            "Client\tWindows 11 Home\tWindows 11 Home\r\n\r\n" +
+            "Server\tWindows Server 2025 SERVERDATACENTER\tWindows Server 2025 Datacenter Evaluation (Desktop Experience)\r\n" +
+            "Client\tWindows 11 Home\twindows 11 home\r\nnot a line\r\n");
+        Assert.Equal([Client("Windows 11 Home"), Server2025[3]], editions);
     }
 
     // --- Reading an image ------------------------------------------------------------------
@@ -137,9 +161,10 @@ public sealed class ServerEditionTests : IDisposable
     {
         var iso = Environment.GetEnvironmentVariable("HVM_TEST_ISO");
         if (string.IsNullOrEmpty(iso) || !File.Exists(iso)) Assert.Skip("Set HVM_TEST_ISO to a Windows ISO to run this.");
-        var editions = await WindowsEditions.ReadAsync(iso, TestContext.Current.CancellationToken);
+        var editions = await WindowsEditions.ReadAsync(iso);
         Assert.NotEmpty(editions);
         Assert.NotNull(WindowsEditions.Choose(editions, ""));
+        Assert.All(editions, e => Assert.Contains(e.Type, new[] { "Client", "Server", "Server Core" }));
         Assert.False((await PowerShellRunner.RunAsync($"(Get-DiskImage -ImagePath {Ps.Quote(iso)}).Attached",
             TestContext.Current.CancellationToken)).Trim().Equals("True", StringComparison.OrdinalIgnoreCase), "The ISO was left mounted.");
         TestContext.Current.SendDiagnosticMessage(string.Join("; ", editions));
@@ -162,143 +187,6 @@ public sealed class ServerEditionTests : IDisposable
         // Defined before the Windows build uses it.
         Assert.True(script.IndexOf("function Get-WimImages", StringComparison.Ordinal)
                     < script.IndexOf("Get-WimImages $wim", StringComparison.Ordinal));
-    }
-
-    // --- The New VM form -------------------------------------------------------------------
-
-    private sealed class FakeReader(Func<string, IReadOnlyList<string>> answer)
-    {
-        public List<string> Read { get; } = [];
-
-        public Task<IReadOnlyList<string>> ReadAsync(string path, CancellationToken ct)
-        {
-            Read.Add(path);
-            return Task.FromResult(answer(path));
-        }
-    }
-
-    private (NewVmViewModel vm, string win, string server, FakeReader reader, List<string> said) Form(string[]? taken = null)
-    {
-        var win = Iso("win11.iso");
-        var server = Iso("server.iso");
-        var history = new InMemoryIsoHistory();
-        history.Remember(server);
-        history.Remember(win); // most recent, so chosen when the form opens
-        var vm = new NewVmViewModel(taken ?? [], history) { EditionReadDelay = TimeSpan.Zero };
-        var said = new List<string>();
-        vm.Announce += said.Add;
-        var reader = new FakeReader(p => p == server ? Server2025 : Win11);
-        vm.ReadEditions = reader.ReadAsync;
-        return (vm, win, server, reader, said);
-    }
-
-    [Fact]
-    public async Task TheIsoChosenWhenTheFormOpens_IsRead_Quietly()
-    {
-        var (vm, win, _, reader, said) = Form();
-        await vm.EditionReadTask;
-        Assert.Equal([win], reader.Read);
-        Assert.Equal(Win11, vm.EditionChoices);
-        Assert.Equal("Windows 11 Pro", vm.Edition);
-        Assert.Empty(said);
-    }
-
-    [Fact]
-    public async Task ChoosingAServerIso_ChoosesItsDesktopEdition_SaysSo_AndRenamesTheSuggestedVm()
-    {
-        var (vm, _, server, _, said) = Form();
-        await vm.EditionReadTask;
-        vm.IsoPath = server;
-        await vm.EditionReadTask;
-        Assert.Equal(Server2025, vm.EditionChoices);
-        Assert.Equal("Windows Server 2025 Datacenter Evaluation (Desktop Experience)", vm.Edition);
-        Assert.Equal(["Edition: Windows Server 2025 Datacenter Evaluation (Desktop Experience)"], said);
-        Assert.Equal($"{Environment.MachineName}-Server", vm.VmName);
-        Assert.NotNull(vm.Validate());
-    }
-
-    [Fact]
-    public async Task GoingBackToTheWindows11Iso_GoesBackToWin11_FromWhatWasAlreadyRead()
-    {
-        var (vm, win, server, reader, _) = Form();
-        await vm.EditionReadTask;
-        vm.IsoPath = server;
-        await vm.EditionReadTask;
-        vm.IsoPath = win;
-        await vm.EditionReadTask;
-        Assert.Equal("Windows 11 Pro", vm.Edition);
-        Assert.Equal($"{Environment.MachineName}-Win11", vm.VmName);
-        Assert.Equal(2, reader.Read.Count); // each ISO mounted once
-    }
-
-    [Fact]
-    public async Task ANameTheUserTyped_IsLeftAlone()
-    {
-        var (vm, _, server, _, _) = Form();
-        await vm.EditionReadTask;
-        vm.VmName = "Stadium-Test";
-        vm.IsoPath = server;
-        await vm.EditionReadTask;
-        Assert.Equal("Stadium-Test", vm.VmName);
-    }
-
-    [Fact]
-    public async Task TheServerName_SkipsOneInUse()
-    {
-        var (vm, _, server, _, _) = Form([$"{Environment.MachineName}-Server"]);
-        await vm.EditionReadTask;
-        vm.IsoPath = server;
-        await vm.EditionReadTask;
-        Assert.Equal($"{Environment.MachineName}-Server-2", vm.VmName);
-    }
-
-    [Fact]
-    public async Task AnEditionTheIsoDoesntHave_IsRefusedBeforeTheBuild()
-    {
-        var (vm, _, _, _, _) = Form();
-        await vm.EditionReadTask;
-        vm.Edition = "Windows 11 Pro for Workstations";
-        Assert.Null(vm.Validate());
-        Assert.Contains("no edition called Windows 11 Pro for Workstations", vm.Error);
-        vm.Edition = "";
-        Assert.Null(vm.Validate());
-        Assert.Contains("Choose an edition", vm.Error);
-    }
-
-    [Fact]
-    public async Task AnIsoThatCantBeRead_LeavesTheEditionToType()
-    {
-        var bad = Iso("not-windows.iso");
-        var history = new InMemoryIsoHistory();
-        history.Remember(bad);
-        var vm = new NewVmViewModel([], history) { EditionReadDelay = TimeSpan.Zero, Edition = "Windows 11 Enterprise" };
-        vm.ReadEditions = (_, _) => throw new HyperVException("not a Windows install ISO");
-        await vm.EditionReadTask;
-        Assert.Empty(vm.EditionChoices);
-        Assert.Equal("Windows 11 Enterprise", vm.Edition);
-        Assert.NotNull(vm.Validate()); // the build is left to say what's wrong
-    }
-
-    [Fact]
-    public async Task ArrowingPastIsos_ReadsOnlyTheOneLeftChosen()
-    {
-        var (vm, win, server, reader, _) = Form();
-        vm.EditionReadDelay = TimeSpan.FromMilliseconds(200);
-        vm.IsoPath = server;
-        vm.IsoPath = win;
-        vm.IsoPath = server;
-        await vm.EditionReadTask;
-        Assert.Equal([win, server], reader.Read); // the first is the one read as the form opened
-    }
-
-    [Fact]
-    public void Ubuntu_ReadsNoEditions()
-    {
-        var vm = new NewVmViewModel([], ubuntu: true);
-        var reads = 0;
-        vm.ReadEditions = (_, _) => { reads++; return Task.FromResult<IReadOnlyList<string>>(Server2025); };
-        Assert.Equal(0, reads);
-        Assert.StartsWith($"{Environment.MachineName}-Ubuntu", vm.VmName);
     }
 
     // --- The answer file -------------------------------------------------------------------

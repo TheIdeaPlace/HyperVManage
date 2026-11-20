@@ -101,29 +101,61 @@ public sealed partial class NewVmViewModel : ObservableObject
     [ObservableProperty] private string _isoPath;
     [ObservableProperty] private string _edition = "Windows 11 Pro";
 
-    /// <summary>The editions in the chosen ISO, once read; empty until then, or if it can't be read,
-    /// and the Edition box can still be typed in.</summary>
+    /// <summary>The display names of the editions in the chosen ISO, once read; empty until then,
+    /// or if it can't be read, and the Edition box can still be typed in.</summary>
     public System.Collections.ObjectModel.ObservableCollection<string> EditionChoices { get; } = [];
 
-    /// <summary>Reads the edition names from an ISO. Null, the default, reads nothing: the window
-    /// sets it for real builds, so neither the demo nor the tests mount ISOs. Setting it reads the
-    /// ISO already chosen.</summary>
-    internal Func<string, CancellationToken, Task<IReadOnlyList<string>>>? ReadEditions
+    /// <summary>The editions behind <see cref="EditionChoices"/>.</summary>
+    private IReadOnlyList<WindowsEdition> _editions = [];
+
+    /// <summary>Reads the editions from an ISO. Null, the default, reads nothing: the window sets
+    /// it for real builds, so neither the demo nor the tests mount ISOs. Setting it reads the ISO
+    /// already chosen. Not cancellable (see <see cref="WindowsEditions.ReadAsync"/>): a read
+    /// nobody wants any more is left to finish, and ignored.</summary>
+    internal Func<string, Task<IReadOnlyList<WindowsEdition>>>? ReadEditions
     {
         get => _readEditions;
         set { _readEditions = value; QueueEditionRead(announce: false); }
     }
-    private Func<string, CancellationToken, Task<IReadOnlyList<string>>>? _readEditions;
+    private Func<string, Task<IReadOnlyList<WindowsEdition>>>? _readEditions;
 
-    /// <summary>How long the ISO must stay chosen before it's read: arrowing through the list
-    /// shouldn't mount every ISO on the way past.</summary>
+    /// <summary>How long the ISO must stay chosen before it's read: arrowing through the closed
+    /// list shouldn't mount every ISO on the way past.</summary>
     internal TimeSpan EditionReadDelay { get; set; } = TimeSpan.FromMilliseconds(700);
 
-    private readonly Dictionary<string, IReadOnlyList<string>> _editionsByIso = new(StringComparer.OrdinalIgnoreCase);
-    private CancellationTokenSource? _editionRead;
+    /// <summary>Set by the window while the ISO list is open: arrowing there only tries ISOs out,
+    /// so nothing is read or said until it closes, and then only for the ISO left chosen.</summary>
+    public bool HoldEditionReads
+    {
+        get => _holdEditionReads;
+        set
+        {
+            if (_holdEditionReads == value) return;
+            _holdEditionReads = value;
+            QueueEditionRead(announce: true);
+        }
+    }
+    private bool _holdEditionReads;
+
+    private readonly Dictionary<string, IReadOnlyList<WindowsEdition>> _editionsByIso = new(StringComparer.OrdinalIgnoreCase);
+    private CancellationTokenSource? _editionDelay;
+    private string? _readingKey;
+    private Task _readRunning = Task.CompletedTask;
+    private bool _readsStopped;
+    private bool _refilling;
 
     /// <summary>Finishes when the latest read of the ISO's editions has; for tests.</summary>
     internal Task EditionReadTask { get; private set; } = Task.CompletedTask;
+
+    /// <summary>Raised when the window's suggested name changes to follow the edition.</summary>
+    public event Action<string>? NameSuggested;
+
+    /// <summary>The form a path is remembered in, so a read and a later check agree.</summary>
+    private static string IsoKey(string path)
+    {
+        try { return System.IO.Path.GetFullPath(path.Trim()); }
+        catch (Exception) { return path.Trim(); }
+    }
 
     // Choosing another ISO can change the edition under the user, so that's said; the ISO already
     // chosen when the window opens is read quietly, so as not to talk over the window's title.
@@ -131,35 +163,59 @@ public sealed partial class NewVmViewModel : ObservableObject
 
     partial void OnEditionChanged(string value)
     {
-        if (IsUbuntu || VmName != _suggestedName) return;
-        var kind = WindowsEditions.IsServer(value) ? "Server" : "Win11";
-        VmName = _suggestedName = SuggestName($"{Environment.MachineName}-{kind}", _taken);
+        // While the list is refilled the box can briefly empty itself; ShowEditions puts it right.
+        if (!_refilling) FollowEditionInName();
+    }
+
+    private void FollowEditionInName()
+    {
+        if (IsUbuntu || _readsStopped || HasStarted || VmName != _suggestedName) return;
+        var server = _editions.FirstOrDefault(e => e.Matches(Edition))?.IsServer
+                     ?? Edition.Contains("Server", StringComparison.OrdinalIgnoreCase);
+        var name = SuggestName($"{Environment.MachineName}-{(server ? "Server" : "Win11")}", _taken);
+        if (name == VmName) return;
+        VmName = _suggestedName = name;
+        NameSuggested?.Invoke(name);
     }
 
     private void QueueEditionRead(bool announce)
     {
-        _editionRead?.Cancel();
-        _editionRead = null;
-        if (IsUbuntu || _readEditions is null) return;
+        _editionDelay?.Cancel();
+        _editionDelay = null;
+        if (IsUbuntu || _readEditions is null || _readsStopped || _holdEditionReads) return;
         var path = IsoPath.Trim();
         if (path.Length == 0 || path == BrowseChoice) return;
-        var stop = _editionRead = new CancellationTokenSource();
-        EditionReadTask = ReadEditionsOf(path, _readEditions, announce, stop.Token);
+        var key = IsoKey(path);
+        if (_editionsByIso.TryGetValue(key, out var known))
+        {
+            ShowEditions(known, announce);
+            return;
+        }
+        // Until this ISO is read, the last one's editions mustn't be offered for it.
+        ShowEditions([], announce: false);
+        // Already being read: that read shows its editions when it lands.
+        if (string.Equals(_readingKey, key, StringComparison.OrdinalIgnoreCase)) return;
+        var delay = _editionDelay = new CancellationTokenSource();
+        EditionReadTask = ReadEditionsOf(key, _readEditions, announce, delay.Token);
     }
 
-    private async Task ReadEditionsOf(string path, Func<string, CancellationToken, Task<IReadOnlyList<string>>> read, bool announce, CancellationToken ct)
+    private async Task ReadEditionsOf(string key, Func<string, Task<IReadOnlyList<WindowsEdition>>> read, bool announce, CancellationToken delay)
     {
         try
         {
-            if (!_editionsByIso.TryGetValue(path, out var editions))
-            {
-                if (!System.IO.File.Exists(path)) return;
-                if (EditionReadDelay > TimeSpan.Zero) await Task.Delay(EditionReadDelay, ct);
-                editions = await read(path, ct);
-                ct.ThrowIfCancellationRequested();
-                _editionsByIso[path] = editions;
-            }
-            ShowEditions(editions, announce);
+            if (!System.IO.File.Exists(key)) return;
+            if (EditionReadDelay > TimeSpan.Zero) await Task.Delay(EditionReadDelay, delay);
+            if (delay.IsCancellationRequested) return;
+            _readingKey = key;
+            var running = read(key);
+            _readRunning = running;
+            IReadOnlyList<WindowsEdition> editions;
+            try { editions = await running; }
+            finally { if (_readingKey == key) _readingKey = null; }
+            _editionsByIso[key] = editions;
+            // Shown only if it's still the ISO chosen, and the list is closed and the build not started.
+            if (!_readsStopped && !_holdEditionReads && string.Equals(IsoKey(IsoPath), key, StringComparison.OrdinalIgnoreCase))
+                ShowEditions(editions, announce);
         }
         catch (OperationCanceledException) { }
         // Not a Windows ISO, or it couldn't be mounted: the box stays as it is, to type in, and the
@@ -167,15 +223,32 @@ public sealed partial class NewVmViewModel : ObservableObject
         catch (Exception) { }
     }
 
-    private void ShowEditions(IReadOnlyList<string> editions, bool announce)
+    private void ShowEditions(IReadOnlyList<WindowsEdition> editions, bool announce)
     {
-        var chosen = WindowsEditions.Choose(editions, Edition);
-        EditionChoices.Clear();
-        foreach (var e in editions) EditionChoices.Add(e);
-        if (chosen is null) return;
-        var changed = !string.Equals(chosen, Edition.Trim(), StringComparison.OrdinalIgnoreCase);
-        Edition = chosen;
-        if (announce && changed && !HasStarted) Announce?.Invoke($"Edition: {chosen}");
+        var before = Edition;
+        var chosen = WindowsEditions.Choose(editions, before);
+        _refilling = true;
+        try
+        {
+            _editions = editions;
+            EditionChoices.Clear();
+            foreach (var e in editions) EditionChoices.Add(e.DisplayName);
+            // Set even when unchanged: clearing the list can have emptied the box.
+            Edition = chosen?.DisplayName ?? before;
+        }
+        finally { _refilling = false; }
+        if (chosen is null || chosen.Matches(before)) return;
+        FollowEditionInName();
+        if (announce) Announce?.Invoke($"Edition: {chosen.DisplayName}");
+    }
+
+    /// <summary>Stops reading editions, and waits for a read that has the ISO mounted, so the build
+    /// doesn't find it mounted and then have it dismounted underneath.</summary>
+    private async Task StopEditionReadsAsync()
+    {
+        _readsStopped = true;
+        _editionDelay?.Cancel();
+        try { await _readRunning; } catch (Exception) { }
     }
     [ObservableProperty] private string _userName = "vmuser";
     [ObservableProperty] private string _password = "vmadmin";
@@ -260,8 +333,8 @@ public sealed partial class NewVmViewModel : ObservableObject
         else if (IsWindows && Edition.Trim().Length == 0) problem = "Choose an edition from the Edition list.";
         else if (IsWindows && Edition.Contains("Home", StringComparison.OrdinalIgnoreCase)) problem = "Home editions can't accept Remote Desktop connections. Use Pro, Enterprise or Education.";
         // Known only once the ISO has been read; otherwise the build checks it.
-        else if (IsWindows && _editionsByIso.TryGetValue(iso, out var known) && known.Count > 0
-                 && !known.Contains(Edition.Trim(), StringComparer.OrdinalIgnoreCase))
+        else if (IsWindows && _editionsByIso.TryGetValue(IsoKey(iso), out var known) && known.Count > 0
+                 && !known.Any(e => e.Matches(Edition)))
             problem = $"This ISO has no edition called {Edition.Trim()}. Choose one from the Edition list.";
 
         Error = problem ?? "";
@@ -274,8 +347,14 @@ public sealed partial class NewVmViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanCreate))]
     private async Task Create()
     {
+        await StopEditionReadsAsync();
         var options = Validate();
-        if (options is null) { Announce?.Invoke(Error); return; }
+        if (options is null)
+        {
+            _readsStopped = false;
+            Announce?.Invoke(Error);
+            return;
+        }
 
         // Remembered as the build starts, so it's offered first next time, even if this one fails.
         // Ubuntu's ISO is the script's own download, so there is none to remember.
