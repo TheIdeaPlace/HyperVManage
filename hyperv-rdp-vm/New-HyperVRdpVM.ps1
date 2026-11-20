@@ -144,6 +144,54 @@ $ProgressPreference = 'SilentlyContinue'
 function Say([string]$Message) { Write-Host $Message }
 function Step([string]$Message) { Write-Host ''; Write-Host $Message }
 
+# --- Assert-RoomForWindows (begin)
+# The VM's disk is dynamic, so it takes up only what Windows uses, and grows as Windows is copied
+# onto it and sets itself up. If the drive holding it fills partway, the copy fails with "The
+# device is not ready", 15 minutes in. So the room is checked first: the image's own size (about
+# 19 GB for Windows 11 Pro, 23 GB for Windows Server with the desktop, 10.5 GB for Server Core),
+# plus 10 GB for what first-run setup adds: the page file, setup's own files and the first updates.
+function Get-RoomForWindows([uint64]$ImageSize) { [uint64]($ImageSize + 10GB) }
+
+# The free space in the folder itself, from Windows, so a folder on a share (\\server\share) or
+# on another volume mounted in a folder is measured where it really is, which PowerShell's
+# drive letters can't do. $null if it can't be told.
+function Get-FreeSpace([string]$Folder) {
+    try {
+        $full = (Resolve-Path -LiteralPath $Folder -ErrorAction Stop).ProviderPath
+        if (-not ('HyperVManage.FreeSpace' -as [type])) {
+            Add-Type -Namespace HyperVManage -Name FreeSpace -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+public static extern bool GetDiskFreeSpaceEx(string directory, out ulong freeToCaller, out ulong total, out ulong totalFree);
+'@
+        }
+        $free = [uint64]0; $total = [uint64]0; $totalFree = [uint64]0
+        if ([HyperVManage.FreeSpace]::GetDiskFreeSpaceEx($full.TrimEnd('\') + '\', [ref]$free, [ref]$total, [ref]$totalFree)) { return $free }
+    } catch { }
+    $null
+}
+
+# Stops the build if the folder hasn't room for $Needed bytes. Says nothing when it has. If the
+# room can't be measured, the build goes on rather than refusing for no good reason.
+function Assert-Room([uint64]$Needed, [string]$What, [string]$Folder, [Nullable[uint64]]$Free = $null) {
+    if ($null -eq $Free) { $Free = Get-FreeSpace $Folder }
+    if ($null -eq $Free) {
+        Say "Couldn't tell how much room there is in $Folder, so the build goes on without checking."
+        return
+    }
+    if ($Free -lt $Needed) {
+        # Whole numbers, needed rounded up and free down, so the two never sound the same.
+        $neededGB = [Math]::Ceiling($Needed / 1GB)
+        $freeGB = [Math]::Floor($Free / 1GB)
+        throw ("{0} needs about {1} GB free for the VM's disk, in {2}, and there's only {3} GB there. Make room, or choose another folder for virtual hard disks in Hyper-V Settings (or with -VhdFolder), and run the script again." -f
+            $What, $neededGB, $Folder, $freeGB)
+    }
+}
+
+function Assert-RoomForWindows([uint64]$ImageSize, [string]$Edition, [string]$Folder, [Nullable[uint64]]$Free = $null) {
+    Assert-Room -Needed (Get-RoomForWindows $ImageSize) -What $Edition -Folder $Folder -Free $Free
+}
+# --- Assert-RoomForWindows (end)
+
 # --- Run as administrator ----------------------------------------------------
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -1085,10 +1133,10 @@ public static class NewVmTimeZone {
                 Say "Using $IsoPath, downloaded before."
             } else {
                 New-Item -ItemType Directory -Path $ubuntuCache -Force | Out-Null
-                $cacheFree = (Get-Item -LiteralPath $ubuntuCache).PSDrive.Free
+                $cacheFree = Get-FreeSpace $ubuntuCache
                 if ($ubuntuArch -eq 'arm64') { $isoGB = 5 } else { $isoGB = 7 }
-                if ($cacheFree -lt [int64]$isoGB * 1GB) {
-                    throw "Ubuntu's installer needs about $isoGB GB free to download into $ubuntuCache, and there's $('{0:0.0}' -f ($cacheFree / 1GB)) GB. Make room and run the script again."
+                if ($null -ne $cacheFree -and $cacheFree -lt [uint64]$isoGB * 1GB) {
+                    throw "Ubuntu's installer needs about $isoGB GB free to download into $ubuntuCache, and there's only $([Math]::Floor($cacheFree / 1GB)) GB there. Make room and run the script again."
                 }
                 $IsoPath = Join-Path $ubuntuCache $newest
                 Remove-Item -LiteralPath $IsoPath -Force -ErrorAction SilentlyContinue
@@ -1365,10 +1413,8 @@ printf '$([NewVmSeedDisk]::FinishedMark)' | dd of="`$disk" bs=512 seek=`$((`$(bl
 sync
 "@
 
-    $vhdFree = (Get-Item -LiteralPath $VhdFolder).PSDrive.Free
-    if ($vhdFree -lt 20GB) {
-        throw "Ubuntu needs about 20 GB free for the VM's disk in $VhdFolder, and there's $('{0:0.0}' -f ($vhdFree / 1GB)) GB. When the drive fills during the install, Hyper-V pauses the VM. Make room and run the script again."
-    }
+    # When the drive fills during the install, Hyper-V pauses the VM.
+    Assert-Room -Needed 20GB -What 'The Ubuntu desktop' -Folder $VhdFolder
     New-VHD -Path $vhdPath -SizeBytes ([uint64]$DiskGB * 1GB) -Dynamic | Out-Null
     try {
         $files['boot/grub/grub.cfg'] = [Text.Encoding]::UTF8.GetBytes($grub.Replace("`r`n", "`n"))
@@ -1500,6 +1546,7 @@ try {
     $imageLanguage = @($info.Languages)[[int]$info.DefaultLanguageIndex]
     if (-not $Locale) { $Locale = $imageLanguage }
     Say "Found $($info.ImageName), version $($info.Version), language $imageLanguage."
+    Assert-RoomForWindows -ImageSize ([uint64]$info.ImageSize) -Edition $info.ImageName -Folder $VhdFolder
 
     Step "Step 2 of 5: Creating a $DiskGB GB virtual disk and copying Windows onto it. This is the longest step."
     New-VHD -Path $vhdPath -SizeBytes ([uint64]$DiskGB * 1GB) -Dynamic | Out-Null
