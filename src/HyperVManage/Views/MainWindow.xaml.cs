@@ -313,7 +313,11 @@ public partial class MainWindow : Window
         }
         var newVm = new NewVmViewModel(_vm.Vms.Select(v => v.Name), _isoHistory, ubuntu);
         if (_demo) newVm.RunScript = Services.DemoNewVmScript.RunAsync;
-        else newVm.LogFolder = NewVmViewModel.DefaultLogFolder;
+        else
+        {
+            newVm.LogFolder = NewVmViewModel.DefaultLogFolder;
+            newVm.ReadEditions = Services.WindowsEditions.ReadAsync;
+        }
         // async void, as an event handler is: everything in it is caught, so nothing can end the app.
         newVm.Finished += async outcome =>
         {

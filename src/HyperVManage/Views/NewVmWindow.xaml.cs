@@ -72,6 +72,10 @@ public partial class NewVmWindow : Window
             {
                 _escapingList = true;
             }
+            // Escape in the open Edition list only closes the list.
+            else if (e.Key == Key.Escape && EditionBox.IsDropDownOpen)
+            {
+            }
             // Otherwise Escape closes the window, as Cancel does; modeless windows don't get that
             // from IsCancel.
             else if (e.Key == Key.Escape)

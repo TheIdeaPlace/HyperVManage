@@ -43,10 +43,10 @@ public sealed partial class NewVmViewModel : ObservableObject
     {
         IsUbuntu = ubuntu;
         _isoHistory = isoHistory ?? new InMemoryIsoHistory();
-        var taken = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
+        _taken = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
         // This PC's name first, as the script does, so VMs made on different PCs on one network
         // don't share a name: two computers with one name confuse Remote Desktop.
-        _vmName = SuggestName($"{Environment.MachineName}-{(ubuntu ? "Ubuntu" : "Win11")}", taken);
+        _vmName = _suggestedName = SuggestName($"{Environment.MachineName}-{(ubuntu ? "Ubuntu" : "Win11")}", _taken);
         // Windows 11 needs 64 GB; the Ubuntu desktop far less. The disk grows only as it's used.
         _diskGB = ubuntu ? "64" : "128";
         // The ISOs used before, most recent first, then the newest in Downloads if it isn't one of
@@ -91,9 +91,92 @@ public sealed partial class NewVmViewModel : ObservableObject
         }
     }
 
+    private readonly HashSet<string> _taken;
+
+    /// <summary>The name the window filled in. While the name is still that one it follows the
+    /// edition, -Win11 or -Server; once the user has typed their own, it's left alone.</summary>
+    private string _suggestedName;
+
     [ObservableProperty] private string _vmName;
     [ObservableProperty] private string _isoPath;
     [ObservableProperty] private string _edition = "Windows 11 Pro";
+
+    /// <summary>The editions in the chosen ISO, once read; empty until then, or if it can't be read,
+    /// and the Edition box can still be typed in.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<string> EditionChoices { get; } = [];
+
+    /// <summary>Reads the edition names from an ISO. Null, the default, reads nothing: the window
+    /// sets it for real builds, so neither the demo nor the tests mount ISOs. Setting it reads the
+    /// ISO already chosen.</summary>
+    internal Func<string, CancellationToken, Task<IReadOnlyList<string>>>? ReadEditions
+    {
+        get => _readEditions;
+        set { _readEditions = value; QueueEditionRead(announce: false); }
+    }
+    private Func<string, CancellationToken, Task<IReadOnlyList<string>>>? _readEditions;
+
+    /// <summary>How long the ISO must stay chosen before it's read: arrowing through the list
+    /// shouldn't mount every ISO on the way past.</summary>
+    internal TimeSpan EditionReadDelay { get; set; } = TimeSpan.FromMilliseconds(700);
+
+    private readonly Dictionary<string, IReadOnlyList<string>> _editionsByIso = new(StringComparer.OrdinalIgnoreCase);
+    private CancellationTokenSource? _editionRead;
+
+    /// <summary>Finishes when the latest read of the ISO's editions has; for tests.</summary>
+    internal Task EditionReadTask { get; private set; } = Task.CompletedTask;
+
+    // Choosing another ISO can change the edition under the user, so that's said; the ISO already
+    // chosen when the window opens is read quietly, so as not to talk over the window's title.
+    partial void OnIsoPathChanged(string value) => QueueEditionRead(announce: true);
+
+    partial void OnEditionChanged(string value)
+    {
+        if (IsUbuntu || VmName != _suggestedName) return;
+        var kind = WindowsEditions.IsServer(value) ? "Server" : "Win11";
+        VmName = _suggestedName = SuggestName($"{Environment.MachineName}-{kind}", _taken);
+    }
+
+    private void QueueEditionRead(bool announce)
+    {
+        _editionRead?.Cancel();
+        _editionRead = null;
+        if (IsUbuntu || _readEditions is null) return;
+        var path = IsoPath.Trim();
+        if (path.Length == 0 || path == BrowseChoice) return;
+        var stop = _editionRead = new CancellationTokenSource();
+        EditionReadTask = ReadEditionsOf(path, _readEditions, announce, stop.Token);
+    }
+
+    private async Task ReadEditionsOf(string path, Func<string, CancellationToken, Task<IReadOnlyList<string>>> read, bool announce, CancellationToken ct)
+    {
+        try
+        {
+            if (!_editionsByIso.TryGetValue(path, out var editions))
+            {
+                if (!System.IO.File.Exists(path)) return;
+                if (EditionReadDelay > TimeSpan.Zero) await Task.Delay(EditionReadDelay, ct);
+                editions = await read(path, ct);
+                ct.ThrowIfCancellationRequested();
+                _editionsByIso[path] = editions;
+            }
+            ShowEditions(editions, announce);
+        }
+        catch (OperationCanceledException) { }
+        // Not a Windows ISO, or it couldn't be mounted: the box stays as it is, to type in, and the
+        // build says what's wrong if it's started.
+        catch (Exception) { }
+    }
+
+    private void ShowEditions(IReadOnlyList<string> editions, bool announce)
+    {
+        var chosen = WindowsEditions.Choose(editions, Edition);
+        EditionChoices.Clear();
+        foreach (var e in editions) EditionChoices.Add(e);
+        if (chosen is null) return;
+        var changed = !string.Equals(chosen, Edition.Trim(), StringComparison.OrdinalIgnoreCase);
+        Edition = chosen;
+        if (announce && changed && !HasStarted) Announce?.Invoke($"Edition: {chosen}");
+    }
     [ObservableProperty] private string _userName = "vmuser";
     [ObservableProperty] private string _password = "vmadmin";
     [ObservableProperty] private string _processors = "4";
@@ -174,7 +257,12 @@ public sealed partial class NewVmViewModel : ObservableObject
         else if (IsWindows && (!int.TryParse(DiskGB.Trim(), out var d) || d < 64)) problem = "Disk size must be a whole number of gigabytes, at least 64. Windows 11 needs that much.";
         else if (IsUbuntu && (!int.TryParse(DiskGB.Trim(), out var u) || u < NewVmScript.UbuntuMinimumDiskGB))
             problem = $"Disk size must be a whole number of gigabytes, at least {NewVmScript.UbuntuMinimumDiskGB}. The Ubuntu desktop needs that much.";
+        else if (IsWindows && Edition.Trim().Length == 0) problem = "Choose an edition from the Edition list.";
         else if (IsWindows && Edition.Contains("Home", StringComparison.OrdinalIgnoreCase)) problem = "Home editions can't accept Remote Desktop connections. Use Pro, Enterprise or Education.";
+        // Known only once the ISO has been read; otherwise the build checks it.
+        else if (IsWindows && _editionsByIso.TryGetValue(iso, out var known) && known.Count > 0
+                 && !known.Contains(Edition.Trim(), StringComparer.OrdinalIgnoreCase))
+            problem = $"This ISO has no edition called {Edition.Trim()}. Choose one from the Edition list.";
 
         Error = problem ?? "";
         if (problem is not null) return null;
