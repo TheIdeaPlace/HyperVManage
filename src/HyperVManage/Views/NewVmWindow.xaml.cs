@@ -72,10 +72,6 @@ public partial class NewVmWindow : Window
             {
                 _escapingList = true;
             }
-            // Escape in the open Edition list only closes the list.
-            else if (e.Key == Key.Escape && EditionBox.IsDropDownOpen)
-            {
-            }
             // Otherwise Escape closes the window, as Cancel does; modeless windows don't get that
             // from IsCancel.
             else if (e.Key == Key.Escape)
@@ -84,29 +80,7 @@ public partial class NewVmWindow : Window
                 Close();
             }
         };
-        IsoBox.DropDownOpened += (_, _) =>
-        {
-            _isoToRestore = _vm.IsoPath == NewVmViewModel.BrowseChoice ? _isoToRestore : _vm.IsoPath;
-            _vm.HoldEditionReads = true;
-        };
-        // The suggested name follows the edition (-Win11 or -Server), perhaps a moment after the
-        // window opens with the name selected to type over. If it changes under focus, it stays
-        // selected, so typing still replaces it, and the new name is said.
-        vm.PropertyChanging += (_, e) =>
-        {
-            if (e.PropertyName == nameof(NewVmViewModel.VmName))
-                _nameWasSelected = NameBox.IsKeyboardFocused && NameBox.Text.Length > 0 && NameBox.SelectionLength == NameBox.Text.Length;
-        };
-        // Said with the edition that caused it, which may not have been said itself (the ISO chosen
-        // as the window opens is read quietly), so the name a VM will get never changes unheard.
-        // Not while the user is typing in the Edition box: it would cut into their typing at the
-        // "r" of Server, and again on backspacing past it.
-        vm.NameSuggested += name =>
-        {
-            if (NameBox.IsKeyboardFocused && _nameWasSelected)
-                Dispatcher.BeginInvoke(() => NameBox.SelectAll(), System.Windows.Threading.DispatcherPriority.Input);
-            if (!EditionBox.IsKeyboardFocusWithin) Announcer.Announce(this, $"Name changed to {name}, for {_vm.Edition}.");
-        };
+        IsoBox.DropDownOpened += (_, _) => _isoToRestore = _vm.IsoPath == NewVmViewModel.BrowseChoice ? _isoToRestore : _vm.IsoPath;
         IsoBox.IsKeyboardFocusWithinChanged += (_, e) =>
         {
             // Arrowed onto Browse in the closed box and then left: it wasn't chosen, so the ISO comes back.
@@ -115,7 +89,6 @@ public partial class NewVmWindow : Window
     }
 
     private bool _escapingList;
-    private bool _nameWasSelected;
 
     private void FocusName()
     {
@@ -221,8 +194,6 @@ public partial class NewVmWindow : Window
         _escapingList = false;
         if (restore) _vm.IsoPath = _isoToRestore;
         SyncIsoSelection();
-        // Now the ISO left chosen is read, once. Choosing Browse reads the file it picks instead.
-        _vm.HoldEditionReads = false;
     }
 
     /// <summary>From choosing Browse until its dialog closes.</summary>
@@ -292,12 +263,5 @@ public partial class NewVmWindow : Window
             return;
         }
         base.OnClosing(e);
-    }
-
-    // Create may be waiting on an ISO read as the window closes; it must not then start a build.
-    protected override void OnClosed(EventArgs e)
-    {
-        _vm.WindowClosed();
-        base.OnClosed(e);
     }
 }

@@ -47,10 +47,7 @@
                     </TextBlock>
 
                     <Label Content="_Edition:" Target="{Binding ElementName=EditionBox}" Padding="0,8,0,2"/>
-                    <!-- Filled with the editions read from the chosen ISO a moment after it's chosen.
-                         Editable, so an edition can still be typed before then, or if the ISO can't be read. -->
-                    <ComboBox x:Name="EditionBox" AutomationProperties.Name="Edition" IsEditable="True"
-                              ItemsSource="{Binding EditionChoices}" Text="{Binding Edition, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBox x:Name="EditionBox" AutomationProperties.Name="Edition" Text="{Binding Edition, UpdateSourceTrigger=PropertyChanged}"/>
                 </StackPanel>
 
                 <Label Content="_User name:" Target="{Binding ElementName=UserBox}" Padding="0,8,0,2"/>

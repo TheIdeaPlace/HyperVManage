@@ -187,7 +187,7 @@ Start-VM SURFACEPRO7-Win11
 | `-Ubuntu`         | off                    | Build an Ubuntu desktop instead of Windows (see [Ubuntu](#ubuntu)) |
 | `-IsoPath`        | newest Windows ISO for this PC's processor in the script's own folder, then in Downloads; with `-Ubuntu`, Ubuntu's own download | The ISO to install from |
 | `-VMName`         | this PC's name and `-Win11`, or `-Ubuntu` | VM name, and the computer name (see [Names](#names)) |
-| `-Edition`        | Windows 11 Pro         | Edition inside the ISO. Home is refused. Windows Server works too; see [Windows Server](#windows-server). |
+| `-Edition`        | Windows 11 Pro         | Edition inside the ISO. Home is refused.       |
 | `-UserName`       | vmuser                 | Windows account name                           |
 | `-Password`       | vmadmin                | Windows account password                       |
 | `-ProcessorCount` | 4                      | Virtual processors                             |
@@ -331,10 +331,7 @@ progress bars, no pop-up dialogs.
    if it holds `\ / : * ? " < > | [ ]`: it becomes file names, and
    `Get-VM -Name` reads the last few as wildcards.
 3. Mounts the ISO, finds `sources\install.wim` or `install.esd`, and picks
-   the index whose `ImageName` equals `-Edition`, or, failing that, whose
-   `NAME` or `DISPLAYNAME` in the image's own XML does (`Get-WimImages`;
-   Windows Server images have different ones). The image's
-   `InstallationType` says whether it is Windows Server.
+   the index whose `ImageName` equals `-Edition`.
 4. Creates a dynamic VHDX, mounts it, and initialises it as GPT. Any
    partition that `Initialize-Disk` adds is removed. It then creates a
    260 MB FAT32 partition (made as basic data so it can take a drive
@@ -346,8 +343,7 @@ progress bars, no pop-up dialogs.
    If bcdboot fails, the script says how and builds the boot files and
    store by hand; see [The boot-store fallback](#the-boot-store-fallback).
 6. Writes `\Windows\Panther\unattend.xml`, which has only the `specialize`
-   and `oobeSystem` passes. For Windows Server it adds the three answers in
-   [Windows Server](#windows-server). It then switches the first partition's GPT type
+   and `oobeSystem` passes. It then switches the first partition's GPT type
    to EFI System and dismounts everything. If this stage fails, the
    half-built VHDX is deleted.
 7. Creates `External Network` with `-AllowManagementOS` if step 2 said to,
@@ -364,47 +360,14 @@ progress bars, no pop-up dialogs.
    the account. Once it gets in, it waits until `HKLM\SYSTEM\Setup` shows
    `SystemSetupInProgress` and `OOBEInProgress` at 0. The same call then
    enables RDP and its firewall group (`@FirewallAPI.dll,-28752`, which
-   works in any language), sets the RDP audio policies, sets
-   AudioEndpointBuilder and Audiosrv to start automatically and starts them
-   (where they exist), turns off the Shutdown Event Tracker, marks the
-   network Private and returns the VM's IPv4 address. A failure in this call
-   reads as "not ready yet", so nothing in it may fail on any edition.
+   works in any language), sets the RDP audio policies, starts Audiosrv,
+   marks the network Private and returns the VM's IPv4 address.
 10. Picks a name that resolves to that IP, trying for up to a minute while
    the VM's name registration catches up: `COMPUTERNAME.local` then
    `COMPUTERNAME` on an external switch, `COMPUTERNAME.mshome.net` on the
    Default Switch. Otherwise it uses the IP. It waits for TCP 3389 to answer,
    then writes the `.rdp` file to the desktop, runs
    `cmdkey /generic:TERMSRV/<target>`, and launches `mstsc`.
-
-### Windows Server
-
-A Windows Server ISO (2022, 2025, Evaluation or not) builds the same way. Pass the edition by
-either of its names: Server images carry an internal `NAME` such as
-`Windows Server 2025 SERVERDATACENTER` and a `DISPLAYNAME` such as
-`Windows Server 2025 Datacenter Evaluation (Desktop Experience)`, and the script accepts both.
-Hyper-V Manage's Edition list shows the display names. The editions without
-"(Desktop Experience)" are **Server Core**: no desktop, Narrator or sound, and Remote Desktop
-opens a command prompt. The script says so when it finds one.
-
-Server would stop an unattended build in three places, so for a Server image the script adds:
-
-- **Simple passwords.** Server requires complex passwords, and the answer file couldn't create
-  `vmuser` with `vmadmin`. The specialize pass runs
-  `C:\Windows\Setup\Scripts\HyperVManage-PasswordRules.ps1`, which the script writes onto the
-  disk: it sets `PasswordComplexity = 0` with `secedit` and the minimum length to 0, before the
-  account is made. A script rather than an inline command, because Setup ignores a
-  `RunSynchronous` path over 259 characters.
-- **The Administrator's password.** Server's first-run setup asks for one, so the answer file
-  gives the built-in Administrator the same password as the account.
-- **Server Manager** would open at every sign-in: `DoNotOpenServerManagerAtLogon` (not on Server
-  Core, which doesn't have it).
-
-Once Windows is set up, step 9 sets AudioEndpointBuilder and Audiosrv to start automatically.
-Server ships with both disabled; if Narrator ran during setup they start once, at the first
-desktop, and not again. It also turns off the Shutdown Event Tracker, which otherwise asks for a
-reason at every shutdown or restart.
-
-An Evaluation edition needs no product key and runs for 180 days.
 
 ### Test plan
 

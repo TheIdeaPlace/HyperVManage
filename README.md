@@ -95,12 +95,7 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
   administrator.
 - **New Windows Virtual Machine** (Ctrl+N): the script's options in a form, with a name that
   starts with this PC's name (for example `SURFACEPRO7-Win11`) so VMs made on different PCs never
-  share one. The **Edition** list fills with the editions in the chosen ISO a moment after it's
-  chosen, read straight from the ISO, and Pro is chosen on a Windows 11 ISO. A **Windows Server**
-  ISO works too: Datacenter with the desktop is chosen (an edition without "(Desktop
-  Experience)" is Server Core, a command prompt with no desktop or sound), the name becomes
-  `SURFACEPRO7-Server`, and the build gives Server the extra answers it needs to set itself up
-  unattended. See [Windows Server](hyperv-rdp-vm/README.md#windows-server). Then
+  share one. Then
   the script's own progress as it
   runs, one line at a time, each one also spoken (PowerShell's own error detail lines stay in the
   log but aren't read out). The arrow keys read back through the lines at any time. When the build
