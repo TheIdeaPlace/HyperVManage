@@ -155,6 +155,10 @@ public sealed partial class NewVmViewModel : ObservableObject
     /// <summary>Raised when the window's suggested name changes to follow the edition.</summary>
     public event Action<string>? NameSuggested;
 
+    /// <summary>The editions read from this ISO; none if it hasn't been read.</summary>
+    private IReadOnlyList<WindowsEdition> EditionsOf(string iso) =>
+        iso.Length > 0 && _editionsByIso.TryGetValue(IsoKey(iso), out var known) ? known : [];
+
     /// <summary>The form a path is remembered in, so a read and a later check agree.</summary>
     private static string IsoKey(string path)
     {
@@ -230,7 +234,7 @@ public sealed partial class NewVmViewModel : ObservableObject
                 _readsRunning.Remove(key);
                 finished.SetResult();
             }
-            if (show && !_readsStopped) ShowEditions(editions, announce);
+            if (show) ShowEditions(editions, announce);
         }
         catch (OperationCanceledException) { }
         // Not a Windows ISO, or it couldn't be mounted: the box stays as it is, to type in, and the
@@ -265,22 +269,36 @@ public sealed partial class NewVmViewModel : ObservableObject
     /// then has it dismounted underneath, and fills the list from what was read. Reads stay off
     /// until <see cref="ResumeEditionReads"/>, or for good once the build starts.
     /// </summary>
-    private async Task FinishEditionReadsAsync()
+    /// <returns>False if a read was still going after <see cref="EditionReadWaitLimit"/>: the ISO
+    /// may still be mounted for it, so no build may start.</returns>
+    private async Task<bool> FinishEditionReadsAsync()
     {
         _readsStopped = true;
         _editionDelay?.Cancel();
         _editionDelay = null;
+        var finished = true;
         if (_readsRunning.Count > 0)
         {
             Announce?.Invoke("Finishing reading the ISO.");
             var all = Task.WhenAll(_readsRunning.Values.ToList());
-            await Task.WhenAny(all, Task.Delay(EditionReadWaitLimit));
+            finished = await Task.WhenAny(all, Task.Delay(EditionReadWaitLimit)) == all;
         }
         // A read that finished while reads were off was kept but not shown. The edition in the box
-        // isn't changed now, at the last moment: if the ISO doesn't have it, the check says so.
-        if (IsWindows && _editionsByIso.TryGetValue(IsoKey(IsoPath), out var known))
-            ShowEditions(known, announce: false, choose: false);
+        // isn't changed now, at the last moment: if the ISO doesn't have it, the check says so. An
+        // ISO chosen during the wait, and not read, mustn't be shown the last one's editions.
+        if (IsWindows)
+            ShowEditions(_editionsByIso.TryGetValue(IsoKey(IsoPath), out var known) ? known : [], announce: false, choose: false);
+        return finished;
     }
+
+    /// <summary>Set once the window has closed. Create can be waiting on a read when it does, and
+    /// must not then start a build with no window to show it or stop it.</summary>
+    public void WindowClosed()
+    {
+        _windowClosed = true;
+        _editionDelay?.Cancel();
+    }
+    private bool _windowClosed;
 
     /// <summary>After Create stops at the form's check: reads go on, and an ISO whose read was put
     /// off by Create is read now.</summary>
@@ -372,11 +390,10 @@ public sealed partial class NewVmViewModel : ObservableObject
         else if (IsWindows && Edition.Trim().Length == 0) problem = "Choose an edition from the Edition list.";
         // By the image's own name too, which isn't translated: on a French ISO, Home is "Famille".
         else if (IsWindows && (Edition.Contains("Home", StringComparison.OrdinalIgnoreCase)
-                 || _editions.FirstOrDefault(e => e.Matches(Edition))?.Name.Contains("Home", StringComparison.OrdinalIgnoreCase) == true))
+                 || EditionsOf(iso).FirstOrDefault(e => e.Matches(Edition))?.IsHome == true))
             problem = "Home editions can't accept Remote Desktop connections. Use Pro, Enterprise or Education.";
         // Known only once the ISO has been read; otherwise the build checks it.
-        else if (IsWindows && _editionsByIso.TryGetValue(IsoKey(iso), out var known) && known.Count > 0
-                 && !known.Any(e => e.Matches(Edition)))
+        else if (IsWindows && EditionsOf(iso) is { Count: > 0 } known && !known.Any(e => e.Matches(Edition)))
             problem = $"This ISO has no edition called {Edition.Trim()}. Choose one from the Edition list.";
 
         Error = problem ?? "";
@@ -389,8 +406,10 @@ public sealed partial class NewVmViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanCreate))]
     private async Task Create()
     {
-        await FinishEditionReadsAsync();
-        var options = Validate();
+        var readsFinished = await FinishEditionReadsAsync();
+        if (_windowClosed) return;
+        var options = readsFinished ? Validate() : null;
+        if (!readsFinished) Error = "The ISO is still being read. Press Create again in a moment.";
         if (options is null)
         {
             Announce?.Invoke(Error);

@@ -10,7 +10,8 @@ namespace HyperVManage.Tests;
 /// build gives Server so it sets itself up without stopping.</summary>
 public sealed class ServerEditionTests : IDisposable
 {
-    internal static WindowsEdition Client(string name) => new(name, name, "Client");
+    internal static WindowsEdition Client(string name) => new(name, name, "Client",
+        name.Contains("Home") ? "Core" : name.Contains("Pro") ? "Professional" : "Education");
 
     internal static readonly WindowsEdition[] Win11 =
         [.. new[] { "Windows 11 Home", "Windows 11 Home N", "Windows 11 Education", "Windows 11 Pro", "Windows 11 Pro N" }.Select(Client)];
@@ -18,10 +19,10 @@ public sealed class ServerEditionTests : IDisposable
     // As on the real Windows Server 2025 Evaluation ISO.
     internal static readonly WindowsEdition[] Server2025 =
     [
-        new("Windows Server 2025 Standard Evaluation", "Windows Server 2025 SERVERSTANDARDCORE", "Server Core"),
-        new("Windows Server 2025 Standard Evaluation (Desktop Experience)", "Windows Server 2025 SERVERSTANDARD", "Server"),
-        new("Windows Server 2025 Datacenter Evaluation", "Windows Server 2025 SERVERDATACENTERCORE", "Server Core"),
-        new("Windows Server 2025 Datacenter Evaluation (Desktop Experience)", "Windows Server 2025 SERVERDATACENTER", "Server"),
+        new("Windows Server 2025 Standard Evaluation", "Windows Server 2025 SERVERSTANDARDCORE", "Server Core", "ServerStandardEval"),
+        new("Windows Server 2025 Standard Evaluation (Desktop Experience)", "Windows Server 2025 SERVERSTANDARD", "Server", "ServerStandardEval"),
+        new("Windows Server 2025 Datacenter Evaluation", "Windows Server 2025 SERVERDATACENTERCORE", "Server Core", "ServerDatacenterEval"),
+        new("Windows Server 2025 Datacenter Evaluation (Desktop Experience)", "Windows Server 2025 SERVERDATACENTER", "Server", "ServerDatacenterEval"),
     ];
 
     internal static string[] Shown(IEnumerable<WindowsEdition> editions) => [.. editions.Select(e => e.DisplayName)];
@@ -95,13 +96,40 @@ public sealed class ServerEditionTests : IDisposable
         Assert.True(Server2025[1].IsServer && !Server2025[1].IsServerCore);
     }
 
+    [Theory]
+    [InlineData("Windows 11 Famille", "Core", true)]                   // translated, but its ID isn't
+    [InlineData("Windows 11 Home N", "CoreN", true)]
+    [InlineData("Windows 11 Home Single Language", "CoreSingleLanguage", true)]
+    [InlineData("Windows 11 Pro", "Professional", false)]
+    [InlineData("Windows 11 Enterprise", "Enterprise", false)]
+    [InlineData("Windows 11 Home", "", true)]                           // no ID: by its own name
+    [InlineData("Windows 11 Pro", "", false)]
+    public void Home_IsKnownByItsEditionId_TheSameRuleAsTheBuild(string name, string editionId, bool home)
+    {
+        Assert.Equal(home, new WindowsEdition(name, name, "Client", editionId).IsHome);
+    }
+
     [Fact]
-    public void Parse_TakesTypeNameAndDisplayName_SkippingBlanksAndRepeats()
+    public void ServerCore_IsNeverTakenForHome()
+    {
+        Assert.All(Server2025, e => Assert.False(e.IsHome));
+        Assert.False(new WindowsEdition("x", "x", "Server Core", "ServerDatacenterCore").IsHome);
+    }
+
+    [Fact]
+    public void Choose_FindsProByItsEditionId_WhateverItsCalled()
+    {
+        Assert.Equal("Windows 11 Professionnel", WindowsEditions.Choose(
+            [new("Windows 11 Famille", "Windows 11 Famille", "Client", "Core"), new("Windows 11 Professionnel", "Windows 11 Professionnel", "Client", "Professional")], "")?.DisplayName);
+    }
+
+    [Fact]
+    public void Parse_TakesTypeNamesAndEditionId_SkippingBlanksAndRepeats()
     {
         var editions = WindowsEditions.Parse(
-            "Client\tWindows 11 Home\tWindows 11 Home\r\n\r\n" +
-            "Server\tWindows Server 2025 SERVERDATACENTER\tWindows Server 2025 Datacenter Evaluation (Desktop Experience)\r\n" +
-            "Client\tWindows 11 Home\twindows 11 home\r\nnot a line\r\n");
+            "Client\tWindows 11 Home\tWindows 11 Home\tCore\r\n\r\n" +
+            "Server\tWindows Server 2025 SERVERDATACENTER\tWindows Server 2025 Datacenter Evaluation (Desktop Experience)\tServerDatacenterEval\r\n" +
+            "Client\tWindows 11 Home\twindows 11 home\tCore\r\nnot a line\r\n");
         Assert.Equal([Client("Windows 11 Home"), Server2025[3]], editions);
     }
 
@@ -126,23 +154,23 @@ public sealed class ServerEditionTests : IDisposable
     }
 
     private static Task<string> RunGetWimImages(string wim) => PowerShellRunner.RunAsync(
-        WindowsEditions.ReadNamesFunction + $"\nGet-WimImages {Ps.Quote(wim)} | ForEach-Object {{ \"$($_.Index)|$($_.Name)|$($_.DisplayName)|$($_.Type)\" }}",
+        WindowsEditions.ReadNamesFunction + $"\nGet-WimImages {Ps.Quote(wim)} | ForEach-Object {{ \"$($_.Index)|$($_.Name)|$($_.DisplayName)|$($_.Type)|$($_.EditionId)\" }}",
         TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task GetWimImages_GivesEachImagesNames_InIndexOrder_FallingBackToTheNameForDisplay()
     {
         var wim = FakeWim("""
-            <IMAGE INDEX="2"><NAME>Windows Server 2025 SERVERDATACENTER</NAME><DISPLAYNAME>Windows Server 2025 Datacenter Evaluation (Desktop Experience)</DISPLAYNAME><WINDOWS><INSTALLATIONTYPE>Server</INSTALLATIONTYPE></WINDOWS></IMAGE>
+            <IMAGE INDEX="2"><NAME>Windows Server 2025 SERVERDATACENTER</NAME><DISPLAYNAME>Windows Server 2025 Datacenter Evaluation (Desktop Experience)</DISPLAYNAME><WINDOWS><INSTALLATIONTYPE>Server</INSTALLATIONTYPE><EDITIONID>ServerDatacenterEval</EDITIONID></WINDOWS></IMAGE>
             <IMAGE INDEX="1"><NAME>Windows Server 2025 SERVERDATACENTERCORE</NAME><DISPLAYNAME>Windows Server 2025 Datacenter Evaluation</DISPLAYNAME><WINDOWS><INSTALLATIONTYPE>Server Core</INSTALLATIONTYPE></WINDOWS></IMAGE>
-            <IMAGE INDEX="10"><NAME>Windows 11 Pro</NAME><WINDOWS><INSTALLATIONTYPE>Client</INSTALLATIONTYPE></WINDOWS></IMAGE>
+            <IMAGE INDEX="10"><NAME>Windows 11 Pro</NAME><WINDOWS><INSTALLATIONTYPE>Client</INSTALLATIONTYPE><EDITIONID>Professional</EDITIONID></WINDOWS></IMAGE>
             """);
         var lines = (await RunGetWimImages(wim)).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(
         [
-            "1|Windows Server 2025 SERVERDATACENTERCORE|Windows Server 2025 Datacenter Evaluation|Server Core",
-            "2|Windows Server 2025 SERVERDATACENTER|Windows Server 2025 Datacenter Evaluation (Desktop Experience)|Server",
-            "10|Windows 11 Pro|Windows 11 Pro|Client",
+            "1|Windows Server 2025 SERVERDATACENTERCORE|Windows Server 2025 Datacenter Evaluation|Server Core|",
+            "2|Windows Server 2025 SERVERDATACENTER|Windows Server 2025 Datacenter Evaluation (Desktop Experience)|Server|ServerDatacenterEval",
+            "10|Windows 11 Pro|Windows 11 Pro|Client|Professional",
         ], lines);
     }
 

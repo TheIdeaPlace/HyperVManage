@@ -5,9 +5,17 @@ namespace HyperVManage.Services;
 /// <param name="Name">The image's own name, which isn't translated: "Windows 11 Pro", or for Windows Server an
 /// internal one such as "Windows Server 2025 SERVERDATACENTER". The build accepts either name.</param>
 /// <param name="Type">Client, Server or Server Core.</param>
-public sealed record WindowsEdition(string DisplayName, string Name, string Type)
+/// <param name="EditionId">Such as Professional, ServerDatacenter, or for Home Core, CoreN or
+/// CoreSingleLanguage; empty if the image doesn't say.</param>
+public sealed record WindowsEdition(string DisplayName, string Name, string Type, string EditionId = "")
 {
     public bool IsServer => Type.StartsWith("Server", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Home, which can't accept Remote Desktop: the same rule as the build script, by edition
+    /// ID, which no ISO translates. An image without one is judged by its own name.</summary>
+    public bool IsHome => !IsServer && (EditionId.Length > 0
+        ? EditionId.StartsWith("Core", StringComparison.OrdinalIgnoreCase)
+        : Name.Contains("Home", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Windows Server with no desktop, Narrator or sound.</summary>
     public bool IsServerCore => Type.Equals("Server Core", StringComparison.OrdinalIgnoreCase);
@@ -45,7 +53,7 @@ public static class WindowsEditions
                 $wim = @("${letter}:\sources\install.wim", "${letter}:\sources\install.esd") |
                     Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
                 if (-not $wim) { throw "$iso isn't a Windows install ISO." }
-                Get-WimImages $wim | ForEach-Object { "$($_.Type)`t$($_.Name)`t$($_.DisplayName)" }
+                Get-WimImages $wim | ForEach-Object { "$($_.Type)`t$($_.Name)`t$($_.DisplayName)`t$($_.EditionId)" }
             }
             finally {
                 if ($mounted) { Dismount-DiskImage -ImagePath $iso | Out-Null }
@@ -71,12 +79,12 @@ public static class WindowsEditions
         return script[from..to];
     }
 
-    /// <summary>Lines of type, name and display name, separated by tabs; repeats of a display name dropped.</summary>
+    /// <summary>Lines of type, name, display name and edition ID, separated by tabs; repeats of a display name dropped.</summary>
     internal static IReadOnlyList<WindowsEdition> Parse(string output) =>
         output.Split('\n')
             .Select(l => l.Trim('\r', ' ').Split('\t'))
-            .Where(f => f.Length == 3 && f[2].Trim().Length > 0)
-            .Select(f => new WindowsEdition(f[2].Trim(), f[1].Trim(), f[0].Trim()))
+            .Where(f => f.Length == 4 && f[2].Trim().Length > 0)
+            .Select(f => new WindowsEdition(f[2].Trim(), f[1].Trim(), f[0].Trim(), f[3].Trim()))
             .DistinctBy(e => e.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -92,10 +100,11 @@ public static class WindowsEditions
         if (editions.Count == 0) return null;
         static bool Has(string name, string word) => name.Contains(word, StringComparison.OrdinalIgnoreCase);
         return editions.FirstOrDefault(e => e.Matches(current))
-            ?? editions.FirstOrDefault(e => !e.IsServer && e.Name.EndsWith(" Pro", StringComparison.OrdinalIgnoreCase))
+            ?? editions.FirstOrDefault(e => !e.IsServer && (e.EditionId.Equals("Professional", StringComparison.OrdinalIgnoreCase)
+                                                             || e.Name.EndsWith(" Pro", StringComparison.OrdinalIgnoreCase)))
             ?? editions.FirstOrDefault(e => e.IsServer && !e.IsServerCore && Has(e.Name, "Datacenter"))
             ?? editions.FirstOrDefault(e => e.IsServer && !e.IsServerCore)
-            ?? editions.FirstOrDefault(e => !Has(e.Name, "Home"))
+            ?? editions.FirstOrDefault(e => !e.IsHome)
             ?? editions[0];
     }
 }

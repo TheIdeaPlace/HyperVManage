@@ -259,6 +259,64 @@ public sealed class ServerEditionFormTests : IDisposable
     }
 
     [Fact]
+    public async Task AReadStillGoingAfterTheWaitLimit_StopsCreate_WithTheIsoUntouched()
+    {
+        var f = Form();
+        await f.Vm.EditionReadTask;
+        f.Reader.Hold(f.Server);
+        f.Vm.IsoPath = f.Server;
+        f.Vm.Edition = Server2025[3].DisplayName;
+        f.Vm.EditionReadWaitLimit = TimeSpan.FromMilliseconds(50);
+        var built = false;
+        f.Vm.RunScript = (_, _, _) => { built = true; return Task.FromResult(BuildOutcome.Succeeded); };
+        await f.Vm.CreateCommand.ExecuteAsync(null);
+        Assert.False(built);
+        Assert.Equal("The ISO is still being read. Press Create again in a moment.", f.Vm.Error);
+        Assert.Contains(f.Vm.Error, f.Said);
+
+        // Once it lands, Create goes ahead, with no second read.
+        f.Reader.Release(f.Server);
+        await f.Vm.CreateCommand.ExecuteAsync(null);
+        Assert.True(built);
+        Assert.Equal([f.Win, f.Server], f.Reader.Read);
+    }
+
+    [Fact]
+    public async Task ClosingTheWindowWhileCreateWaits_StartsNoBuild()
+    {
+        var f = Form();
+        await f.Vm.EditionReadTask;
+        f.Reader.Hold(f.Server);
+        f.Vm.IsoPath = f.Server;
+        f.Vm.Edition = Server2025[3].DisplayName;
+        var built = false;
+        f.Vm.RunScript = (_, _, _) => { built = true; return Task.FromResult(BuildOutcome.Succeeded); };
+        var create = f.Vm.CreateCommand.ExecuteAsync(null);
+        f.Vm.WindowClosed(); // Escape while it says "Finishing reading the ISO."
+        f.Reader.Release(f.Server);
+        await create;
+        Assert.False(built);
+        Assert.False(f.Vm.HasStarted);
+    }
+
+    [Fact]
+    public async Task AnIsoChosenWhileCreateWaits_IsntShownTheLastOnesEditions()
+    {
+        var f = Form();
+        await f.Vm.EditionReadTask;
+        f.Reader.Hold(f.Server);
+        f.Vm.IsoPath = f.Server;
+        f.Vm.VmName = ""; // so the check stops it
+        var create = f.Vm.CreateCommand.ExecuteAsync(null);
+        f.Vm.IsoPath = f.Win2; // not read yet
+        f.Reader.Release(f.Server);
+        await create;
+        Assert.DoesNotContain(Server2025[3].DisplayName, f.Vm.EditionChoices);
+        await f.Vm.EditionReadTask; // reads go on afterwards, and read it
+        Assert.Equal(Shown(Win11), f.Vm.EditionChoices);
+    }
+
+    [Fact]
     public async Task CreateDuringARead_ThatFailsTheCheck_LeavesTheListFilled()
     {
         // Enter pressed as the window opens on a Server ISO, before its editions have arrived.

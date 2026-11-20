@@ -1470,7 +1470,7 @@ sync
 
 # --- Get-WimImages (begin): Hyper-V Manage reads this function out of the script to fill its Edition list.
 # The images in a .wim or .esd, from the file's own description of itself: Index, Name,
-# DisplayName and Type (Client, Server or Server Core). Most ISOs give an image the same Name and
+# DisplayName, Type (Client, Server or Server Core) and EditionId (Home's all start Core). Most ISOs give an image the same Name and
 # DisplayName, but Windows Server's keep an internal Name such as "Windows Server 2025
 # SERVERDATACENTER" beside the DisplayName "Windows Server 2025 Datacenter Evaluation (Desktop
 # Experience)". Read from the file rather than with Get-WindowsImage, which needs administrator
@@ -1492,7 +1492,7 @@ function Get-WimImages([string]$Path) {
     $xml = [xml]$text
     @($xml.WIM.IMAGE) | Sort-Object { [int]$_.INDEX } | ForEach-Object {
         $display = if ("$($_.DISPLAYNAME)".Trim()) { "$($_.DISPLAYNAME)".Trim() } else { "$($_.NAME)".Trim() }
-        [pscustomobject]@{ Index = [int]$_.INDEX; Name = "$($_.NAME)".Trim(); DisplayName = $display; Type = "$($_.WINDOWS.INSTALLATIONTYPE)" }
+        [pscustomobject]@{ Index = [int]$_.INDEX; Name = "$($_.NAME)".Trim(); DisplayName = $display; Type = "$($_.WINDOWS.INSTALLATIONTYPE)"; EditionId = "$($_.WINDOWS.EDITIONID)" }
     }
 }
 # --- Get-WimImages (end)

@@ -97,13 +97,15 @@ public partial class NewVmWindow : Window
             if (e.PropertyName == nameof(NewVmViewModel.VmName))
                 _nameWasSelected = NameBox.IsKeyboardFocused && NameBox.Text.Length > 0 && NameBox.SelectionLength == NameBox.Text.Length;
         };
-        // Said wherever focus is, after the edition that caused it, so the name a VM will get
-        // never changes unheard.
+        // Said with the edition that caused it, which may not have been said itself (the ISO chosen
+        // as the window opens is read quietly), so the name a VM will get never changes unheard.
+        // Not while the user is typing in the Edition box: it would cut into their typing at the
+        // "r" of Server, and again on backspacing past it.
         vm.NameSuggested += name =>
         {
             if (NameBox.IsKeyboardFocused && _nameWasSelected)
                 Dispatcher.BeginInvoke(() => NameBox.SelectAll(), System.Windows.Threading.DispatcherPriority.Input);
-            if (IsActive) Announcer.Announce(this, $"Name changed to {name}, to match the edition.");
+            if (!EditionBox.IsKeyboardFocusWithin) Announcer.Announce(this, $"Name changed to {name}, for {_vm.Edition}.");
         };
         IsoBox.IsKeyboardFocusWithinChanged += (_, e) =>
         {
@@ -290,5 +292,12 @@ public partial class NewVmWindow : Window
             return;
         }
         base.OnClosing(e);
+    }
+
+    // Create may be waiting on an ISO read as the window closes; it must not then start a build.
+    protected override void OnClosed(EventArgs e)
+    {
+        _vm.WindowClosed();
+        base.OnClosed(e);
     }
 }
