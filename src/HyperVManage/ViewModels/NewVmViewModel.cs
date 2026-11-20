@@ -139,9 +139,14 @@ public sealed partial class NewVmViewModel : ObservableObject
 
     private readonly Dictionary<string, IReadOnlyList<WindowsEdition>> _editionsByIso = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _editionDelay;
-    private string? _readingKey;
-    private Task _readRunning = Task.CompletedTask;
+    /// <summary>Every read under way, by ISO. Reads can't be cancelled, so a read of an ISO chosen
+    /// earlier can still be running, with that ISO mounted, after another has started.</summary>
+    private readonly Dictionary<string, Task> _readsRunning = new(StringComparer.OrdinalIgnoreCase);
     private bool _readsStopped;
+
+    /// <summary>The longest Create waits for reads to finish. A read is a mount, a few kilobytes and
+    /// a dismount, so this is only reached if Windows' disk service has stuck.</summary>
+    internal TimeSpan EditionReadWaitLimit { get; set; } = TimeSpan.FromSeconds(30);
     private bool _refilling;
 
     /// <summary>Finishes when the latest read of the ISO's editions has; for tests.</summary>
@@ -194,7 +199,7 @@ public sealed partial class NewVmViewModel : ObservableObject
         // Until this ISO is read, the last one's editions mustn't be offered for it.
         ShowEditions([], announce: false);
         // Already being read: that read shows its editions when it lands.
-        if (string.Equals(_readingKey, key, StringComparison.OrdinalIgnoreCase)) return;
+        if (_readsRunning.ContainsKey(key)) return;
         var delay = _editionDelay = new CancellationTokenSource();
         EditionReadTask = ReadEditionsOf(key, _readEditions, announce, delay.Token);
     }
@@ -205,17 +210,27 @@ public sealed partial class NewVmViewModel : ObservableObject
         {
             if (!System.IO.File.Exists(key)) return;
             if (EditionReadDelay > TimeSpan.Zero) await Task.Delay(EditionReadDelay, delay);
-            if (delay.IsCancellationRequested) return;
-            _readingKey = key;
-            var running = read(key);
-            _readRunning = running;
+            if (delay.IsCancellationRequested || _readsRunning.ContainsKey(key)) return;
             IReadOnlyList<WindowsEdition> editions;
-            try { editions = await running; }
-            finally { if (_readingKey == key) _readingKey = null; }
-            _editionsByIso[key] = editions;
-            // Shown only if it's still the ISO chosen, and the list is closed and the build not started.
-            if (!_readsStopped && !_holdEditionReads && string.Equals(IsoKey(IsoPath), key, StringComparison.OrdinalIgnoreCase))
-                ShowEditions(editions, announce);
+            bool show;
+            var finished = new TaskCompletionSource();
+            _readsRunning[key] = finished.Task;
+            try
+            {
+                editions = await read(key);
+                // Kept before the read counts as finished: Create, waiting on it, checks against this.
+                _editionsByIso[key] = editions;
+                // Shown only if it's still the ISO chosen, the list is closed, and Create isn't
+                // waiting on it. Decided now: finishing can run Create's check, which turns reads
+                // back on, and the edition mustn't then change under the message it gave.
+                show = !_readsStopped && !_holdEditionReads && string.Equals(IsoKey(IsoPath), key, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                _readsRunning.Remove(key);
+                finished.SetResult();
+            }
+            if (show && !_readsStopped) ShowEditions(editions, announce);
         }
         catch (OperationCanceledException) { }
         // Not a Windows ISO, or it couldn't be mounted: the box stays as it is, to type in, and the
@@ -223,10 +238,12 @@ public sealed partial class NewVmViewModel : ObservableObject
         catch (Exception) { }
     }
 
-    private void ShowEditions(IReadOnlyList<WindowsEdition> editions, bool announce)
+    /// <param name="choose">Choose an edition from the list if the one in the box isn't in it; if
+    /// not, only the list is filled, and the edition is left for the form's check to question.</param>
+    private void ShowEditions(IReadOnlyList<WindowsEdition> editions, bool announce, bool choose = true)
     {
         var before = Edition;
-        var chosen = WindowsEditions.Choose(editions, before);
+        var chosen = choose ? WindowsEditions.Choose(editions, before) : editions.FirstOrDefault(e => e.Matches(before));
         _refilling = true;
         try
         {
@@ -238,17 +255,39 @@ public sealed partial class NewVmViewModel : ObservableObject
         }
         finally { _refilling = false; }
         if (chosen is null || chosen.Matches(before)) return;
-        FollowEditionInName();
+        // The edition first, then the name that follows from it.
         if (announce) Announce?.Invoke($"Edition: {chosen.DisplayName}");
+        FollowEditionInName();
     }
 
-    /// <summary>Stops reading editions, and waits for a read that has the ISO mounted, so the build
-    /// doesn't find it mounted and then have it dismounted underneath.</summary>
-    private async Task StopEditionReadsAsync()
+    /// <summary>
+    /// Before Create: lets every read finish, so the build never finds an ISO mounted for reading and
+    /// then has it dismounted underneath, and fills the list from what was read. Reads stay off
+    /// until <see cref="ResumeEditionReads"/>, or for good once the build starts.
+    /// </summary>
+    private async Task FinishEditionReadsAsync()
     {
         _readsStopped = true;
         _editionDelay?.Cancel();
-        try { await _readRunning; } catch (Exception) { }
+        _editionDelay = null;
+        if (_readsRunning.Count > 0)
+        {
+            Announce?.Invoke("Finishing reading the ISO.");
+            var all = Task.WhenAll(_readsRunning.Values.ToList());
+            await Task.WhenAny(all, Task.Delay(EditionReadWaitLimit));
+        }
+        // A read that finished while reads were off was kept but not shown. The edition in the box
+        // isn't changed now, at the last moment: if the ISO doesn't have it, the check says so.
+        if (IsWindows && _editionsByIso.TryGetValue(IsoKey(IsoPath), out var known))
+            ShowEditions(known, announce: false, choose: false);
+    }
+
+    /// <summary>After Create stops at the form's check: reads go on, and an ISO whose read was put
+    /// off by Create is read now.</summary>
+    private void ResumeEditionReads()
+    {
+        _readsStopped = false;
+        if (!_editionsByIso.ContainsKey(IsoKey(IsoPath))) QueueEditionRead(announce: true);
     }
     [ObservableProperty] private string _userName = "vmuser";
     [ObservableProperty] private string _password = "vmadmin";
@@ -331,7 +370,10 @@ public sealed partial class NewVmViewModel : ObservableObject
         else if (IsUbuntu && (!int.TryParse(DiskGB.Trim(), out var u) || u < NewVmScript.UbuntuMinimumDiskGB))
             problem = $"Disk size must be a whole number of gigabytes, at least {NewVmScript.UbuntuMinimumDiskGB}. The Ubuntu desktop needs that much.";
         else if (IsWindows && Edition.Trim().Length == 0) problem = "Choose an edition from the Edition list.";
-        else if (IsWindows && Edition.Contains("Home", StringComparison.OrdinalIgnoreCase)) problem = "Home editions can't accept Remote Desktop connections. Use Pro, Enterprise or Education.";
+        // By the image's own name too, which isn't translated: on a French ISO, Home is "Famille".
+        else if (IsWindows && (Edition.Contains("Home", StringComparison.OrdinalIgnoreCase)
+                 || _editions.FirstOrDefault(e => e.Matches(Edition))?.Name.Contains("Home", StringComparison.OrdinalIgnoreCase) == true))
+            problem = "Home editions can't accept Remote Desktop connections. Use Pro, Enterprise or Education.";
         // Known only once the ISO has been read; otherwise the build checks it.
         else if (IsWindows && _editionsByIso.TryGetValue(IsoKey(iso), out var known) && known.Count > 0
                  && !known.Any(e => e.Matches(Edition)))
@@ -347,12 +389,12 @@ public sealed partial class NewVmViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanCreate))]
     private async Task Create()
     {
-        await StopEditionReadsAsync();
+        await FinishEditionReadsAsync();
         var options = Validate();
         if (options is null)
         {
-            _readsStopped = false;
             Announce?.Invoke(Error);
+            ResumeEditionReads();
             return;
         }
 

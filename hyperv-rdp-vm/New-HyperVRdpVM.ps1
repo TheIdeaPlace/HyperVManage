@@ -1544,8 +1544,15 @@ try {
     # see the answer file below.
     $isServer = "$($info.InstallationType)" -like 'Server*'
     $isServerCore = "$($info.InstallationType)" -eq 'Server Core'
+    # Home, by its edition ID rather than its name, which an ISO in another language translates:
+    # Home's IDs are Core, CoreN, CoreSingleLanguage and so on.
+    if (-not $isServer -and "$($info.EditionId)" -like 'Core*') {
+        throw "$($info.ImageName) is a Home edition, which can't accept Remote Desktop connections. Use a Pro, Enterprise or Education edition."
+    }
     if ($isServerCore) {
-        Say 'This is Server Core, which has no desktop: Remote Desktop opens a command prompt, and there is no sound or Narrator. For a desktop, choose an edition ending in (Desktop Experience).'
+        $desktops = @($listed | Where-Object Type -eq 'Server' | Select-Object -ExpandProperty DisplayName)
+        $choose = if ($desktops) { "For a desktop, choose $($desktops -join ' or ')." } else { 'For a desktop, choose an edition that has one.' }
+        Say "This is Server Core, which has no desktop: Remote Desktop opens a command prompt, and there is no sound or Narrator. $choose"
     }
 
     Step "Step 2 of 5: Creating a $DiskGB GB virtual disk and copying Windows onto it. This is the longest step."

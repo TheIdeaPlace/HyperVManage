@@ -97,11 +97,13 @@ public partial class NewVmWindow : Window
             if (e.PropertyName == nameof(NewVmViewModel.VmName))
                 _nameWasSelected = NameBox.IsKeyboardFocused && NameBox.Text.Length > 0 && NameBox.SelectionLength == NameBox.Text.Length;
         };
+        // Said wherever focus is, after the edition that caused it, so the name a VM will get
+        // never changes unheard.
         vm.NameSuggested += name =>
         {
-            if (!NameBox.IsKeyboardFocused) return;
-            if (_nameWasSelected) Dispatcher.BeginInvoke(() => NameBox.SelectAll(), System.Windows.Threading.DispatcherPriority.Input);
-            Announcer.Announce(this, $"Name: {name}");
+            if (NameBox.IsKeyboardFocused && _nameWasSelected)
+                Dispatcher.BeginInvoke(() => NameBox.SelectAll(), System.Windows.Threading.DispatcherPriority.Input);
+            if (IsActive) Announcer.Announce(this, $"Name changed to {name}, to match the edition.");
         };
         IsoBox.IsKeyboardFocusWithinChanged += (_, e) =>
         {

@@ -246,12 +246,120 @@ public sealed class ServerEditionFormTests : IDisposable
         await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(built.Task.IsCompleted, "The build started while the ISO was still mounted for reading.");
 
+        Assert.Contains("Finishing reading the ISO.", f.Said);
+
         f.Reader.Release(f.Server);
         await create;
-        // The read landed, but after Create: the edition and name are what the build was given.
-        Assert.Equal("Windows Server 2025 SERVERDATACENTER", (await built.Task).Edition);
-        Assert.Equal("Windows Server 2025 SERVERDATACENTER", f.Vm.Edition);
+        // The same edition, now in the list's own words; the name is what it was.
+        const string datacenter = "Windows Server 2025 Datacenter Evaluation (Desktop Experience)";
+        Assert.Equal(datacenter, (await built.Task).Edition);
+        Assert.Equal(datacenter, f.Vm.Edition);
         Assert.Equal(name, f.Vm.VmName);
+        Assert.Equal(Shown(Server2025), f.Vm.EditionChoices);
+    }
+
+    [Fact]
+    public async Task CreateDuringARead_ThatFailsTheCheck_LeavesTheListFilled()
+    {
+        // Enter pressed as the window opens on a Server ISO, before its editions have arrived.
+        var f = Form();
+        await f.Vm.EditionReadTask;
+        f.Reader.Hold(f.Server);
+        f.Vm.IsoPath = f.Server;
+        var built = false;
+        f.Vm.RunScript = (_, _, _) => { built = true; return Task.FromResult(BuildOutcome.Succeeded); };
+        var create = f.Vm.CreateCommand.ExecuteAsync(null);
+        f.Reader.Release(f.Server);
+        await create;
+        Assert.False(built);
+        Assert.Contains("no edition called Windows 11 Pro. Choose one from the Edition list", f.Vm.Error);
+        Assert.Equal(Shown(Server2025), f.Vm.EditionChoices); // there to choose from
+        Assert.Equal("Windows 11 Pro", f.Vm.Edition); // not changed at the last moment
+    }
+
+    [Fact]
+    public async Task CreateBeforeAReadHasStarted_ThatFailsTheCheck_ReadsTheIsoAfterwards()
+    {
+        var f = Form();
+        await f.Vm.EditionReadTask;
+        f.Vm.EditionReadDelay = TimeSpan.FromMilliseconds(200);
+        f.Vm.IsoPath = f.Server;
+        f.Vm.VmName = "";
+        await f.Vm.CreateCommand.ExecuteAsync(null);
+        Assert.True(f.Vm.HasError);
+        await f.Vm.EditionReadTask;
+        Assert.Equal([f.Win, f.Server], f.Reader.Read);
+        Assert.Equal(Shown(Server2025), f.Vm.EditionChoices);
+    }
+
+    [Fact]
+    public async Task AnIsoStillBeingReadFromBefore_IsntReadTwice_AndCreateWaitsForEveryRead()
+    {
+        var f = Form();
+        await f.Vm.EditionReadTask;
+        f.Reader.Hold(f.Server);
+        f.Reader.Hold(f.Win2);
+        f.Vm.IsoPath = f.Server; // read starts, and can't be stopped
+        f.Vm.IsoPath = f.Win2;   // so does this one
+        f.Vm.IsoPath = f.Server; // still being read: not mounted a second time
+        Assert.Equal([f.Win, f.Server, f.Win2], f.Reader.Read);
+        f.Vm.Edition = Server2025[3].DisplayName;
+
+        var built = new TaskCompletionSource();
+        f.Vm.RunScript = (_, _, _) => { built.TrySetResult(); return Task.FromResult(BuildOutcome.Succeeded); };
+        var create = f.Vm.CreateCommand.ExecuteAsync(null);
+        f.Reader.Release(f.Server);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        Assert.False(built.Task.IsCompleted, "The build started while another ISO was still mounted for reading.");
+        f.Reader.Release(f.Win2);
+        await create;
+        Assert.True(built.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task AReaderThatFailsAtOnce_DoesntStopThatIsoBeingReadLater()
+    {
+        var f = Form();
+        await f.Vm.EditionReadTask;
+        var reader = f.Vm.ReadEditions!;
+        var fail = true;
+        f.Vm.ReadEditions = p => fail ? throw new HyperVException("not yet") : reader(p);
+        f.Vm.IsoPath = f.Server;
+        await f.Vm.EditionReadTask;
+        fail = false;
+        f.Vm.IsoPath = f.Win;
+        f.Vm.IsoPath = f.Server;
+        await f.Vm.EditionReadTask;
+        Assert.Equal(Shown(Server2025), f.Vm.EditionChoices);
+    }
+
+    [Fact]
+    public async Task TheEditionIsSaid_BeforeTheNameThatFollowsIt()
+    {
+        var f = Form();
+        var order = new List<string>();
+        f.Vm.Announce += s => order.Add(s);
+        f.Vm.NameSuggested += n => order.Add($"name {n}");
+        await f.Vm.EditionReadTask;
+        f.Vm.IsoPath = f.Server;
+        await f.Vm.EditionReadTask;
+        Assert.Equal(["Edition: Windows Server 2025 Datacenter Evaluation (Desktop Experience)", $"name {Environment.MachineName}-Server"], order);
+    }
+
+    [Fact]
+    public async Task HomeIsRefused_ByTheImagesOwnName_InAnyLanguage()
+    {
+        var french = Iso("fr.iso");
+        var history = new InMemoryIsoHistory();
+        history.Remember(french);
+        var vm = new NewVmViewModel([], history) { EditionReadDelay = TimeSpan.Zero };
+        vm.ReadEditions = _ => Task.FromResult<IReadOnlyList<WindowsEdition>>(
+            [new("Windows 11 Famille", "Windows 11 Home", "Client"), new("Windows 11 Professionnel", "Windows 11 Pro", "Client")]);
+        await vm.EditionReadTask;
+        Assert.Equal("Windows 11 Professionnel", vm.Edition);
+        vm.Edition = "Windows 11 Famille";
+        Assert.Null(vm.Validate());
+        Assert.Contains("Home editions can't accept Remote Desktop", vm.Error);
     }
 
     [Fact]
@@ -311,6 +419,28 @@ public sealed class ServerEditionFormTests : IDisposable
     }
 
     [StaFact]
+    public void WithTheIsoListOpen_TryingIsosReadsNothing_AndClosingItReadsTheOneChosen()
+    {
+        var f = Form();
+        var window = Show(f);
+        try
+        {
+            var isoBox = (ComboBox)window.FindName("IsoBox");
+            isoBox.IsDropDownOpen = true;
+            Pump();
+            f.Vm.IsoPath = f.Server; // arrowed onto in the open list
+            Pump();
+            Assert.Equal([f.Win], f.Reader.Read);
+            Assert.Empty(f.Said);
+            isoBox.IsDropDownOpen = false; // Enter: the ISO is chosen
+            Pump();
+            Assert.Equal([f.Win, f.Server], f.Reader.Read);
+            Assert.Equal("Windows Server 2025 Datacenter Evaluation (Desktop Experience)", f.Vm.Edition);
+        }
+        finally { window.Close(); }
+    }
+
+    [StaFact]
     public void ANameChangedUnderFocus_StaysSelected_SoTypingStillReplacesIt()
     {
         var f = Form();
@@ -322,10 +452,12 @@ public sealed class ServerEditionFormTests : IDisposable
             name.Focus();
             name.SelectAll();
             Pump();
+            if (!name.IsKeyboardFocused) Assert.Skip("The test window couldn't take keyboard focus here.");
             f.Vm.IsoPath = f.Server;
             Pump();
             Assert.Equal($"{Environment.MachineName}-Server", name.Text);
-            if (name.IsKeyboardFocused) Assert.Equal(name.Text.Length, name.SelectionLength);
+            Assert.True(name.IsKeyboardFocused);
+            Assert.Equal(name.Text.Length, name.SelectionLength);
         }
         finally { window.Close(); }
     }

@@ -180,10 +180,12 @@ public sealed class ServerEditionTests : IDisposable
     }
 
     [Fact]
-    public void TheBuild_AcceptsEitherOfAServerImagesNames()
+    public void TheBuild_AcceptsEitherOfAServerImagesNames_AndRefusesHomeInAnyLanguage()
     {
         var script = File.ReadAllText(Path.Combine(ScriptBuildingTests.RepoRoot(), "hyperv-rdp-vm", "New-HyperVRdpVM.ps1"));
         Assert.Contains("$_.Name -eq $Edition -or $_.DisplayName -eq $Edition", script);
+        // Home's edition IDs all start Core; the name is translated.
+        Assert.Contains("if (-not $isServer -and \"$($info.EditionId)\" -like 'Core*')", script);
         // Defined before the Windows build uses it.
         Assert.True(script.IndexOf("function Get-WimImages", StringComparison.Ordinal)
                     < script.IndexOf("Get-WimImages $wim", StringComparison.Ordinal));
