@@ -262,7 +262,7 @@ public class IsoListBehaviorTests
         Pump();
         f.Box.SelectedIndex = f.BrowseIndex; // arrowed onto
         Pump();
-        ((TextBox)f.Window.FindName("EditionBox")).Focus(); // Tab away
+        ((ComboBox)f.Window.FindName("EditionBox")).Focus(); // Tab away
         Pump();
         Assert.Equal(0, f.Picks);
         Assert.Equal(f.B, f.Vm.IsoPath);
