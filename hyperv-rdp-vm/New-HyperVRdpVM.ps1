@@ -67,11 +67,7 @@
 
 .PARAMETER Edition
     Which edition in the ISO to install. It must be one that can accept
-    Remote Desktop connections, so Home editions are refused. Windows Server
-    works too, for example 'Windows Server 2025 Datacenter Evaluation (Desktop
-    Experience)'; an edition without "(Desktop Experience)" is Server Core,
-    which has no desktop. If the name isn't in the ISO, the script lists the
-    ones that are.
+    Remote Desktop connections, so Home editions are refused.
 
 .PARAMETER SwitchName
     The Hyper-V virtual switch to connect the VM to. Leave it out and the VM
@@ -1468,35 +1464,6 @@ sync
     return
 }
 
-# --- Get-WimImages (begin): Hyper-V Manage reads this function out of the script to fill its Edition list.
-# The images in a .wim or .esd, from the file's own description of itself: Index, Name,
-# DisplayName, Type (Client, Server or Server Core) and EditionId (Home's all start Core). Most ISOs give an image the same Name and
-# DisplayName, but Windows Server's keep an internal Name such as "Windows Server 2025
-# SERVERDATACENTER" beside the DisplayName "Windows Server 2025 Datacenter Evaluation (Desktop
-# Experience)". Read from the file rather than with Get-WindowsImage, which needs administrator
-# rights. The header, 72 bytes in, gives the description's size (7 bytes, then a flags byte) and
-# position; it is UTF-16 XML and never compressed, even in an .esd.
-function Get-WimImages([string]$Path) {
-    $fs = [IO.File]::OpenRead($Path)
-    try {
-        $br = New-Object IO.BinaryReader $fs
-        if ([Text.Encoding]::ASCII.GetString($br.ReadBytes(8)) -ne "MSWIM`0`0`0") { throw "$Path isn't a Windows image." }
-        $fs.Position = 72
-        $size = $br.ReadInt64() -band 0x00FFFFFFFFFFFFFF
-        $offset = $br.ReadInt64()
-        if ($size -le 0 -or $size -gt 64MB -or $offset -le 0 -or $offset + $size -gt $fs.Length) { throw "$Path has no readable list of editions." }
-        $fs.Position = $offset
-        $text = [Text.Encoding]::Unicode.GetString($br.ReadBytes([int]$size)).TrimStart([char]0xFEFF).TrimEnd([char]0)
-    }
-    finally { $fs.Dispose() }
-    $xml = [xml]$text
-    @($xml.WIM.IMAGE) | Sort-Object { [int]$_.INDEX } | ForEach-Object {
-        $display = if ("$($_.DISPLAYNAME)".Trim()) { "$($_.DISPLAYNAME)".Trim() } else { "$($_.NAME)".Trim() }
-        [pscustomobject]@{ Index = [int]$_.INDEX; Name = "$($_.NAME)".Trim(); DisplayName = $display; Type = "$($_.WINDOWS.INSTALLATIONTYPE)"; EditionId = "$($_.WINDOWS.EDITIONID)" }
-    }
-}
-# --- Get-WimImages (end)
-
 # --- Build the virtual disk ---------------------------------------------------
 $isoMounted = $false
 $vhdMounted = $false
@@ -1521,15 +1488,8 @@ try {
 
     $images = Get-WindowsImage -ImagePath $wim
     $match = $images | Where-Object ImageName -eq $Edition | Select-Object -First 1
-    # Windows Server images have two names (see Get-WimImages): either is accepted.
-    $listed = @(try { Get-WimImages $wim } catch { })
     if (-not $match) {
-        $byName = $listed | Where-Object { $_.Name -eq $Edition -or $_.DisplayName -eq $Edition } | Select-Object -First 1
-        if ($byName) { $match = $images | Where-Object ImageIndex -eq $byName.Index | Select-Object -First 1 }
-    }
-    if (-not $match) {
-        $available = if ($listed) { ($listed | Select-Object -ExpandProperty DisplayName) -join '; ' }
-                     else { ($images | Select-Object -ExpandProperty ImageName) -join '; ' }
+        $available = ($images | Select-Object -ExpandProperty ImageName) -join '; '
         throw "The ISO has no edition called '$Edition'. It has: $available. Pass one with -Edition."
     }
     $info = Get-WindowsImage -ImagePath $wim -Index $match.ImageIndex
@@ -1540,20 +1500,6 @@ try {
     $imageLanguage = @($info.Languages)[[int]$info.DefaultLanguageIndex]
     if (-not $Locale) { $Locale = $imageLanguage }
     Say "Found $($info.ImageName), version $($info.Version), language $imageLanguage."
-    # InstallationType is Client, Server or Server Core. Server needs a few extra answers:
-    # see the answer file below.
-    $isServer = "$($info.InstallationType)" -like 'Server*'
-    $isServerCore = "$($info.InstallationType)" -eq 'Server Core'
-    # Home, by its edition ID rather than its name, which an ISO in another language translates:
-    # Home's IDs are Core, CoreN, CoreSingleLanguage and so on.
-    if (-not $isServer -and "$($info.EditionId)" -like 'Core*') {
-        throw "$($info.ImageName) is a Home edition, which can't accept Remote Desktop connections. Use a Pro, Enterprise or Education edition."
-    }
-    if ($isServerCore) {
-        $desktops = @($listed | Where-Object Type -eq 'Server' | Select-Object -ExpandProperty DisplayName)
-        $choose = if ($desktops) { "For a desktop, choose $($desktops -join ' or ')." } else { 'For a desktop, choose an edition that has one.' }
-        Say "This is Server Core, which has no desktop: Remote Desktop opens a command prompt, and there is no sound or Narrator. $choose"
-    }
 
     Step "Step 2 of 5: Creating a $DiskGB GB virtual disk and copying Windows onto it. This is the longest step."
     New-VHD -Path $vhdPath -SizeBytes ([uint64]$DiskGB * 1GB) -Dynamic | Out-Null
@@ -1772,52 +1718,6 @@ public static class NewVmAppHive {
     $xLanguage = [Security.SecurityElement]::Escape($imageLanguage)
     $component = "processorArchitecture=`"$unattendArch`" publicKeyToken=`"31bf3856ad364e35`" language=`"neutral`" versionScope=`"nonSxS`""
 
-    # Windows Server differs from Windows 11 in three ways that would stop an unattended build:
-    #  - It requires complex passwords, so a simple one like vmadmin would fail to create the
-    #    account. A script run in the specialize pass, before the account is made, turns that
-    #    rule off: this is a test VM, and Remote Desktop signs in with the saved password.
-    #  - Its first-run setup stops to ask for the built-in Administrator's password; the answer
-    #    file gives it the same one.
-    #  - Server Manager opens at every sign-in.
-    $serverSpecialize = ''
-    $serverRun = ''
-    $serverAccounts = ''
-    if ($isServer) {
-        $setupScripts = "${winLetter}:\Windows\Setup\Scripts"
-        New-Item -ItemType Directory -Path $setupScripts -Force | Out-Null
-        $passwordRules = @'
-$inf = "$env:windir\Temp\HyperVManage-password.inf"
-$db = "$env:windir\Temp\HyperVManage-password.sdb"
-secedit.exe /export /cfg $inf /areas SECURITYPOLICY /quiet
-(Get-Content -LiteralPath $inf) -replace '^\s*PasswordComplexity\s*=.*$', 'PasswordComplexity = 0' |
-    Set-Content -LiteralPath $inf -Encoding Unicode
-secedit.exe /configure /db $db /cfg $inf /areas SECURITYPOLICY /quiet
-Remove-Item -LiteralPath $inf, $db -Force -ErrorAction SilentlyContinue
-net.exe accounts /minpwlen:0 | Out-Null
-'@
-        [IO.File]::WriteAllText("$setupScripts\HyperVManage-PasswordRules.ps1", $passwordRules, (New-Object Text.UTF8Encoding $false))
-        $serverRun = @"
-        <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
-          <Description>Allow a simple password (Windows Server requires complex ones)</Description>
-          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\HyperVManage-PasswordRules.ps1</Path>
-        </RunSynchronousCommand>
-"@
-        if (-not $isServerCore) {
-            $serverSpecialize = @"
-    <component name="Microsoft-Windows-ServerManager-SvrMgrNc" $component>
-      <DoNotOpenServerManagerAtLogon>true</DoNotOpenServerManagerAtLogon>
-    </component>
-"@
-        }
-        $serverAccounts = @"
-        <AdministratorPassword>
-          <Value>$xPass</Value>
-          <PlainText>true</PlainText>
-        </AdministratorPassword>
-"@
-    }
-
     # Windows Setup is skipped entirely, so only the specialize and oobeSystem
     # passes are needed. Windows reads this from \Windows\Panther on first boot.
     $unattend = @"
@@ -1858,9 +1758,9 @@ net.exe accounts /minpwlen:0 | Out-Null
           <Description>Skip the network requirement in first-run setup</Description>
           <Path>reg.exe add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
-$serverRun      </RunSynchronous>
+      </RunSynchronous>
     </component>
-$serverSpecialize  </settings>
+  </settings>
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-International-Core" $component>
       <InputLocale>$xLocale</InputLocale>
@@ -1880,7 +1780,7 @@ $serverSpecialize  </settings>
         <SkipUserOOBE>true</SkipUserOOBE>
       </OOBE>
       <UserAccounts>
-$serverAccounts        <LocalAccounts>
+        <LocalAccounts>
           <LocalAccount wcm:action="add">
             <Name>$xUser</Name>
             <DisplayName>$xUser</DisplayName>
@@ -1950,17 +1850,8 @@ $configureGuest = {
     $policy = 'HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
     reg.exe add $policy /v fDisableCam /t REG_DWORD /d 0 /f | Out-Null
     reg.exe add $policy /v fDisableAudioCapture /t REG_DWORD /d 0 /f | Out-Null
-    # Windows Server ships with both audio services disabled, and a Server that ran Narrator
-    # during setup starts them only once, so they are set to start every time. Server Core has
-    # neither, and any error here would be taken as "not ready yet", so only those present are set.
-    foreach ($audio in 'AudioEndpointBuilder', 'Audiosrv') {
-        if (Get-Service -Name $audio -ErrorAction SilentlyContinue) {
-            Set-Service -Name $audio -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service -Name $audio -ErrorAction SilentlyContinue
-        }
-    }
-    # Windows Server asks for a reason every time it is shut down or restarted.
-    reg.exe add 'HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Reliability' /v ShutdownReasonOn /t REG_DWORD /d 0 /f | Out-Null
+    Set-Service -Name Audiosrv -StartupType Automatic
+    Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
     Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue
     $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '127.0.0.1' } |
