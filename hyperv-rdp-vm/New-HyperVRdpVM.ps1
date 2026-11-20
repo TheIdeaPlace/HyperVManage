@@ -1464,6 +1464,26 @@ sync
     return
 }
 
+# --- Assert-RoomForWindows (begin)
+# The VM's disk is dynamic, so it takes up only what Windows uses, and grows as Windows is copied
+# onto it and sets itself up. If the drive holding it fills partway, the copy fails with "The
+# device is not ready", 15 minutes in. So the room is checked first: the image's own size (about
+# 19 GB for Windows 11 Pro, 23 GB for Windows Server with the desktop, 10.5 GB for Server Core),
+# plus 10 GB for what first-run setup adds: the page file, setup's own files and the first updates.
+function Get-RoomForWindows([uint64]$ImageSize) { [uint64]($ImageSize + 10GB) }
+
+function Assert-RoomForWindows([uint64]$ImageSize, [string]$Folder, [Nullable[uint64]]$Free = $null) {
+    if ($null -eq $Free) { $Free = [uint64](Get-Item -LiteralPath $Folder).PSDrive.Free }
+    $needed = Get-RoomForWindows $ImageSize
+    if ($Free -lt $needed) {
+        $drive = Split-Path -Qualifier $Folder
+        throw ("This Windows needs about {0:0} GB free for the VM's disk in {1}, and {2} has {3:0.0} GB. Make room on {2}, or choose a folder on another drive with -VhdFolder, and run the script again." -f
+            ($needed / 1GB), $Folder, $drive, ($Free / 1GB))
+    }
+    Say ("Room for the VM's disk: {0:0.0} GB free on {1}, and it needs about {2:0} GB." -f ($Free / 1GB), (Split-Path -Qualifier $Folder), ($needed / 1GB))
+}
+# --- Assert-RoomForWindows (end)
+
 # --- Build the virtual disk ---------------------------------------------------
 $isoMounted = $false
 $vhdMounted = $false
@@ -1500,6 +1520,7 @@ try {
     $imageLanguage = @($info.Languages)[[int]$info.DefaultLanguageIndex]
     if (-not $Locale) { $Locale = $imageLanguage }
     Say "Found $($info.ImageName), version $($info.Version), language $imageLanguage."
+    Assert-RoomForWindows -ImageSize ([uint64]$info.ImageSize) -Folder $VhdFolder
 
     Step "Step 2 of 5: Creating a $DiskGB GB virtual disk and copying Windows onto it. This is the longest step."
     New-VHD -Path $vhdPath -SizeBytes ([uint64]$DiskGB * 1GB) -Dynamic | Out-Null

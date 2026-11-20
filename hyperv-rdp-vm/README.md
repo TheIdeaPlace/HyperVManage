@@ -331,7 +331,12 @@ progress bars, no pop-up dialogs.
    if it holds `\ / : * ? " < > | [ ]`: it becomes file names, and
    `Get-VM -Name` reads the last few as wildcards.
 3. Mounts the ISO, finds `sources\install.wim` or `install.esd`, and picks
-   the index whose `ImageName` equals `-Edition`.
+   the index whose `ImageName` equals `-Edition`. It then checks the drive
+   holding the VM's disk has room for the image's own size plus 10 GB for
+   first-run setup (about 29 GB for Windows 11 Pro, 33 GB for Windows Server
+   with the desktop), and stops there if not. Without the check, a drive
+   that fills during the copy fails 15 minutes in with "The device is not
+   ready".
 4. Creates a dynamic VHDX, mounts it, and initialises it as GPT. Any
    partition that `Initialize-Disk` adds is removed. It then creates a
    260 MB FAT32 partition (made as basic data so it can take a drive
