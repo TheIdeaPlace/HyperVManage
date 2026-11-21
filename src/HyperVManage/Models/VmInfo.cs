@@ -14,27 +14,53 @@ public sealed partial class VmInfo : ObservableObject
     /// <summary>Hyper-V's VM id. Stable across renames, so it is what a refresh matches on.</summary>
     public string Id { get; }
 
+    // Everything a column can show also changes the row's name, which is made of the columns.
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName))] private string _name = "";
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(StateText))] private string _state = "Off";
-    [ObservableProperty] private int _processorCount;
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(MemoryText))] private long _memoryStartupMB;
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(MemoryText))] private long _memoryAssignedMB;
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(MemoryText))] private bool _dynamicMemory;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(ProcessorsText))] private int _processorCount;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(MemoryText))] private long _memoryStartupMB;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(MemoryInUseText))] private long _memoryAssignedMB;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(MemoryText))] private bool _dynamicMemory;
     [ObservableProperty] private long _uptimeSeconds;
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(StartsWithPcText))] private string _automaticStartAction = "";
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(StartsWithPcText))] private string _automaticStartAction = "";
     [ObservableProperty] private bool _automaticCheckpoints;
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName))] private string _switchName = "";
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(AddressText))] private string[] _ipAddresses = [];
-    [ObservableProperty] private int _checkpointCount;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(CheckpointsText))] private int _checkpointCount;
     [ObservableProperty] private int _generation;
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName))] private bool _isBusy;
 
+    /// <summary>The folder Hyper-V keeps the VM's configuration in.</summary>
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName))] private string _location = "";
+
+    /// <summary>The VM's virtual hard disk files, in the order Hyper-V lists them.</summary>
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(DisksText))] private string[] _diskPaths = [];
+
+    /// <summary>The columns shown and whether their names are spoken; the list sets it on every row.</summary>
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName))] private VmRowFormat _rowFormat = VmRowFormat.Default;
+
     public string StateText => VmStates.Describe(State);
+
+    public string ProcessorsText => ProcessorCount > 0 ? ProcessorCount.ToString(System.Globalization.CultureInfo.CurrentCulture) : "";
+
+    public string DisksText => string.Join("; ", DiskPaths);
+
+    public string CheckpointsText => CheckpointCount switch
+    {
+        0 => "No checkpoints",
+        1 => "1 checkpoint",
+        var n => $"{n} checkpoints",
+    };
 
     public string AddressText => IpAddresses.Length > 0 ? string.Join(", ", IpAddresses) : "";
 
-    public string MemoryText =>
-        MemoryAssignedMB > 0 ? $"{FormatMB(MemoryAssignedMB)} in use" : FormatMB(MemoryStartupMB);
+    /// <summary>The memory the VM starts with: steady, so it can be in the row's name without the
+    /// focused row being read again as dynamic memory moves.</summary>
+    public string MemoryText => MemoryStartupMB > 0 ? FormatMB(MemoryStartupMB) : "";
+
+    /// <summary>What a running VM is using now. It moves every few seconds with dynamic memory, so
+    /// it's a column of its own, off to begin with.</summary>
+    public string MemoryInUseText => MemoryAssignedMB > 0 ? $"{FormatMB(MemoryAssignedMB)} in use" : "";
 
     public string StartsWithPcText => AutomaticStartAction switch
     {
@@ -45,21 +71,11 @@ public sealed partial class VmInfo : ObservableObject
     };
 
     /// <summary>
-    /// What a screen reader says for the row: name and state first, then the address and
-    /// network, which are what someone choosing a VM to connect to needs next. Set on the row
+    /// What a screen reader says for the row: the columns shown, in their order on screen, with
+    /// names when Speak column names is on, then "busy" while an operation runs. Set on the row
     /// container, and returned by ToString, which is where a list item's name comes from.
     /// </summary>
-    public string AccessibleName
-    {
-        get
-        {
-            var parts = new List<string> { Name, StateText };
-            if (IpAddresses.Length > 0) parts.Add(AddressText);
-            if (SwitchName.Length > 0) parts.Add(SwitchName);
-            if (IsBusy) parts.Add("busy");
-            return string.Join(", ", parts);
-        }
-    }
+    public string AccessibleName => RowFormat.Compose(this);
 
     public override string ToString() => AccessibleName;
 
@@ -80,6 +96,8 @@ public sealed partial class VmInfo : ObservableObject
         if (!IpAddresses.SequenceEqual(other.IpAddresses)) IpAddresses = other.IpAddresses;
         CheckpointCount = other.CheckpointCount;
         Generation = other.Generation;
+        Location = other.Location;
+        if (!DiskPaths.SequenceEqual(other.DiskPaths)) DiskPaths = other.DiskPaths;
     }
 
     internal static string FormatMB(long mb) =>

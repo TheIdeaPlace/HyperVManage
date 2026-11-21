@@ -50,7 +50,15 @@ public partial class ShortcutsWindow : Window
             ("Ctrl+Shift+K", "apply a checkpoint"),
             ("Ctrl+D", "clone"),
             ("Ctrl+Shift+S", "take a screenshot of the VM's screen"),
+            ("Alt+W, C", "choose the list's columns"),
             ("Alt or F10", "the menu bar"),
+        ]),
+        ("In Columns (View menu)",
+        [
+            ("Enter in Available", "add the column"),
+            ("Delete in Shown", "remove the column"),
+            ("Alt+Up or Alt+Down Arrow", "move the column up or down"),
+            ("Alt+Home or Alt+End", "move the column to the top or bottom"),
         ]),
         ("In the screenshot window",
         [

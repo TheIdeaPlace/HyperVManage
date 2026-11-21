@@ -87,7 +87,7 @@ public class UbuntuBuildTests
             $ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }
             """);
         var taken = names.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var options in new[] { Ubuntu(orca: false), Ubuntu() with { Ubuntu = false, HostOnly = true, AutoStart = false, Connect = false, IsoPath = "x.iso", Edition = "e" } })
+        foreach (var options in new[] { Ubuntu(orca: false) with { Location = @"D:\Hyper-V" }, Ubuntu() with { Ubuntu = false, HostOnly = true, AutoStart = false, Connect = false, IsoPath = "x.iso", Edition = "e", Location = @"D:\VMs" } })
         {
             var cmd = NewVmScript.BuildCommand(options, "HyperVManage-test");
             var passed = Regex.Matches(cmd[cmd.IndexOf("Create($scriptText))", StringComparison.Ordinal)..], @"(?<=\s)-([A-Za-z]+)").Select(m => m.Groups[1].Value);
@@ -98,7 +98,8 @@ public class UbuntuBuildTests
     [Fact]
     public void ThePrecheck_RefusesALeftoverInstallerDisk_AndTheCleanupRemovesOne()
     {
-        Assert.Contains("$installer = Join-Path (Get-VMHost).VirtualHardDiskPath \"$name-installer.vhd\"", NewVmScript.BuildPrecheckScript("A", ""));
+        Assert.Contains("else { (Get-VMHost).VirtualHardDiskPath }", NewVmScript.BuildPrecheckScript("A", ""));
+        Assert.Contains("$installer = Join-Path $folder \"$name-installer.vhd\"", NewVmScript.BuildPrecheckScript("A", ""));
         Assert.Contains("InstallerExists = [bool](Test-Path -LiteralPath $installer)", NewVmScript.BuildPrecheckScript("A", ""));
         // The script names its installer disk the same way.
         Assert.Contains("$seedPath = Join-Path $VhdFolder \"$VMName-installer.vhd\"", Script());
@@ -669,7 +670,7 @@ public class LinuxScreenshotTests
         public Task ApplyCheckpointAsync(string vmId, string checkpointId, string? saveCurrentAs, CancellationToken ct = default) => _demo.ApplyCheckpointAsync(vmId, checkpointId, saveCurrentAs, ct);
         public Task DeleteCheckpointsAsync(string vmId, IReadOnlyList<string> checkpointIds, bool includeLater, CancellationToken ct = default) => _demo.DeleteCheckpointsAsync(vmId, checkpointIds, includeLater, ct);
         public Task RenameCheckpointAsync(string vmId, string checkpointId, string newName, CancellationToken ct = default) => _demo.RenameCheckpointAsync(vmId, checkpointId, newName, ct);
-        public Task CloneAsync(string vmId, string newName, CancellationToken ct = default) => _demo.CloneAsync(vmId, newName, ct);
+        public Task CloneAsync(string vmId, string newName, string? location = null, CancellationToken ct = default) => _demo.CloneAsync(vmId, newName, location, ct);
         public Task<IReadOnlyList<string>> GetDiskPathsAsync(string vmId, CancellationToken ct = default) => _demo.GetDiskPathsAsync(vmId, ct);
         public Task<DeleteResult> DeleteAsync(string vmId, CancellationToken ct = default) => _demo.DeleteAsync(vmId, ct);
         public Task<string> CreateExternalSwitchAsync(CancellationToken ct = default) => _demo.CreateExternalSwitchAsync(ct);

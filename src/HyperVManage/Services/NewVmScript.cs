@@ -25,7 +25,8 @@ public sealed record NewVmOptions(
     bool AutoStart,
     bool Connect,
     bool Ubuntu = false,
-    bool Orca = true);
+    bool Orca = true,
+    string Location = "");
 
 /// <summary>How a build ended.</summary>
 public enum BuildOutcome { Succeeded, Failed, Stopped }
@@ -116,8 +117,64 @@ public static class NewVmScript
         if (!o.AutoStart) sb.Append(" -NoAutoStart");
         if (!o.Connect) sb.Append(" -NoConnect");
         if (o.Ubuntu && !o.Orca) sb.Append(" -NoOrca");
+        if (o.Location.Length > 0) sb.Append(" -Location ").Append(Ps.Quote(o.Location));
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Why a folder can't be a VM's location, or null if it can; an empty one means Hyper-V's
+    /// default folders and is always fine. The same checks as the script's, asked in the form so
+    /// they show there rather than as a failed build: a full path, a drive that's there, and NTFS
+    /// or ReFS, which Hyper-V needs and many external drives aren't. A network share is checked
+    /// only for its form: asking a server that isn't there would hold up the window.
+    /// </summary>
+    /// <param name="driveFormat">The file system of a drive letter's root, or null if it isn't
+    /// there; for tests.</param>
+    /// <param name="isMappedDrive">Whether a drive letter is a mapped network drive; for tests.</param>
+    public static string? LocationProblem(string location, Func<string, string?>? driveFormat = null, Func<string, bool>? isMappedDrive = null)
+    {
+        if (location.Length == 0) return null;
+        var isShare = location.StartsWith(@"\\", StringComparison.Ordinal);
+        if (!isShare && !(location.Length >= 3 && char.IsAsciiLetter(location[0]) && location[1] == ':' && location[2] == '\\'))
+            return @"The location must be a full path to a folder, such as D:\Hyper-V.";
+        if (isShare)
+            return location.TrimStart('\\').Split('\\', StringSplitOptions.RemoveEmptyEntries).Length >= 2 ? null
+                : @"A location on a network share needs the server and the share, such as \\server\share\Hyper-V.";
+        if (location.IndexOfAny(Path.GetInvalidPathChars()) >= 0 || location.IndexOfAny(['*', '?', '"', '<', '>', '|'], 2) >= 0)
+            return "The location can't contain any of these: * ? \" < > |";
+        var root = char.ToUpperInvariant(location[0]) + @":\";
+        // Asked before anything touches the drive: a disconnected network drive would hold up the
+        // window. Hyper-V's own service can't see drive letters mapped for a user, so the build would
+        // fail; the share's own path works.
+        if ((isMappedDrive ?? IsMappedDrive)(root))
+            return $@"{root} is a mapped network drive, which Hyper-V can't use. Type the share's own path instead, such as \\server\share\Hyper-V.";
+        var format = (driveFormat ?? DriveFormat)(root);
+        if (format is null) return $"There's no drive {root} on this PC just now. Plug it in, or choose another location.";
+        if (!format.Equals("NTFS", StringComparison.OrdinalIgnoreCase) && !format.Equals("ReFS", StringComparison.OrdinalIgnoreCase))
+            return $"Hyper-V can only keep a virtual machine on a drive formatted NTFS or ReFS, and {root} is {format}. Choose a folder on another drive, or reformat this one as NTFS.";
+        if (File.Exists(location.TrimEnd('\\'))) return $"{location} is a file, not a folder. Choose a folder for the location.";
+        return null;
+    }
+
+    private static bool IsMappedDrive(string root)
+    {
+        try { return new DriveInfo(root).DriveType == DriveType.Network; }
+        catch (Exception) { return false; }
+    }
+
+    private static string? DriveFormat(string root)
+    {
+        try
+        {
+            var drive = new DriveInfo(root);
+            return drive.IsReady ? drive.DriveFormat : null;
+        }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>The folder a VM gets of its own in a location, which Delete and a stopped build's
+    /// cleanup remove once it's empty.</summary>
+    public static string VmFolder(string location, string vmName) => Path.Combine(location, vmName);
 
     /// <summary>
     /// What the script would refuse, asked before it starts: a VM of that name, or a disk already
@@ -125,11 +182,17 @@ public static class NewVmScript
     /// the VM's disk path, which the cleanup after a stop needs; knowing neither disk existed
     /// beforehand is what makes it safe to delete them then.
     /// </summary>
-    internal static string BuildPrecheckScript(string vmName, string isoPath) => $$"""
+    /// <remarks>With a location, the disks go where the script puts them: in the VM's own folder's
+    /// Virtual Hard Disks. Whether that folder was there already is returned too: if it wasn't, it's
+    /// the build's own, and a stopped build's cleanup can remove it once it's empty.</remarks>
+    internal static string BuildPrecheckScript(string vmName, string isoPath, string location = "") => $$"""
         $name = {{Ps.Quote(vmName)}}
         $iso = {{Ps.Quote(isoPath)}}
-        $vhd = Join-Path (Get-VMHost).VirtualHardDiskPath "$name.vhdx"
-        $installer = Join-Path (Get-VMHost).VirtualHardDiskPath "$name-installer.vhd"
+        $location = {{Ps.Quote(location)}}
+        $own = if ($location) { Join-Path $location $name } else { '' }
+        $folder = if ($location) { Join-Path $own 'Virtual Hard Disks' } else { (Get-VMHost).VirtualHardDiskPath }
+        $vhd = Join-Path $folder "$name.vhdx"
+        $installer = Join-Path $folder "$name-installer.vhd"
         ConvertTo-Json -Compress -InputObject ([pscustomobject]@{
             Vhd = $vhd
             VhdExists = [bool](Test-Path -LiteralPath $vhd)
@@ -137,6 +200,8 @@ public static class NewVmScript
             InstallerExists = [bool](Test-Path -LiteralPath $installer)
             VmExists = [bool](Get-VM | Where-Object Name -eq $name)
             IsoWasMounted = [bool]($iso -and (Get-DiskImage -ImagePath $iso -ErrorAction SilentlyContinue).Attached)
+            OwnFolder = $own
+            OwnFolderExisted = [bool]($own -and (Test-Path -LiteralPath $own))
         })
         """;
 
@@ -148,9 +213,12 @@ public static class NewVmScript
     /// own. A VM that already exists is left for the user to delete, since by then it is a real
     /// VM; deleting it deletes its installer disk too.
     /// </summary>
-    internal static string BuildCleanupScript(string vmName, string isoPath, string vhdPath, bool isoWasMounted = false, string installerPath = "") => $$"""
+    /// <param name="ownFolder">The folder of its own the build made for the VM in its location, which
+    /// didn't exist before; removed if nothing is left in it. Empty for none.</param>
+    internal static string BuildCleanupScript(string vmName, string isoPath, string vhdPath, bool isoWasMounted = false, string installerPath = "", string ownFolder = "") => $$"""
         $name = {{Ps.Quote(vmName)}}
         $installer = {{Ps.Quote(installerPath)}}
+        $own = {{Ps.Quote(ownFolder)}}
         # An ISO that was already open before the build, in File Explorer, stays open, as the
         # script itself leaves it.
         $iso = {{(isoWasMounted ? "''" : Ps.Quote(isoPath))}}
@@ -174,6 +242,11 @@ public static class NewVmScript
                 $removed = $true
             }
             if (-not $removed) { "Nothing had been built yet." }
+            if ($own -and (Test-Path -LiteralPath $own -PathType Container) -and
+                -not (Get-ChildItem -LiteralPath $own -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+                try { Remove-Item -LiteralPath $own -Recurse -Force -ErrorAction Stop; "Removed the empty folder $own." }
+                catch { "Couldn't remove the folder $own. $($_.Exception.Message)" }
+            }
         }
         """;
 
@@ -186,13 +259,17 @@ public static class NewVmScript
         string vhdPath;
         string installerPath;
         bool isoWasMounted;
+        string newFolder;
         try
         {
-            using var doc = JsonDocument.Parse(await PowerShellRunner.RunAsync(BuildPrecheckScript(options.VMName, options.IsoPath), ct).ConfigureAwait(false));
+            using var doc = JsonDocument.Parse(await PowerShellRunner.RunAsync(BuildPrecheckScript(options.VMName, options.IsoPath, options.Location), ct).ConfigureAwait(false));
             var r = doc.RootElement;
             vhdPath = r.GetProperty("Vhd").GetString() ?? "";
             installerPath = r.GetProperty("Installer").GetString() ?? "";
             isoWasMounted = r.TryGetProperty("IsoWasMounted", out var m) && m.ValueKind == JsonValueKind.True;
+            // Only a folder that wasn't there before is the build's to remove.
+            var existed = r.TryGetProperty("OwnFolderExisted", out var e) && e.ValueKind == JsonValueKind.True;
+            newFolder = existed ? "" : (r.TryGetProperty("OwnFolder", out var f) ? f.GetString() ?? "" : "");
             if (r.GetProperty("VmExists").GetBoolean())
             {
                 onLine($"There is already a virtual machine named {options.VMName}. Pick another name.");
@@ -228,7 +305,7 @@ public static class NewVmScript
                 onLine("Stopped. Cleaning up what the build had made so far.");
                 try
                 {
-                    var report = await PowerShellRunner.RunAsync(BuildCleanupScript(options.VMName, options.IsoPath, vhdPath, isoWasMounted, installerPath)).ConfigureAwait(false);
+                    var report = await PowerShellRunner.RunAsync(BuildCleanupScript(options.VMName, options.IsoPath, vhdPath, isoWasMounted, installerPath, newFolder)).ConfigureAwait(false);
                     foreach (var line in report.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) onLine(line);
                 }
                 catch (Exception ex) { onLine($"Couldn't clean up: {ex.Message}"); }
@@ -317,6 +394,17 @@ public static class NewVmScript
         var start = script.IndexOf("$ComputerName = ($VMName", StringComparison.Ordinal);
         var end = start < 0 ? -1 : script.IndexOf("if (-not $ComputerName)", start, StringComparison.Ordinal);
         if (start < 0 || end < 0) throw new InvalidOperationException("The computer-name lines weren't found in the embedded script.");
+        return script[start..end];
+    }
+
+    /// <summary>The script's own Get-FreeSpace function, from the embedded script, so Clone measures
+    /// a folder's free space the way a build does, shares and mounted folders included.</summary>
+    public static string FreeSpaceFunction()
+    {
+        var script = ScriptText();
+        var start = script.IndexOf("function Get-FreeSpace(", StringComparison.Ordinal);
+        var end = start < 0 ? -1 : script.IndexOf("# Stops the build if", start, StringComparison.Ordinal);
+        if (start < 0 || end < 0) throw new InvalidOperationException("Get-FreeSpace wasn't found in the embedded script.");
         return script[start..end];
     }
 }

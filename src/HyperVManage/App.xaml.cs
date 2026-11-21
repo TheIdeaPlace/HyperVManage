@@ -71,7 +71,8 @@ public partial class App : Application
         }
 
         IHyperVService service = demo ? new DemoHyperVService() : new PowerShellHyperVService();
-        var vm = new MainViewModel(service, demo ? new InMemoryCredentialStore() : new WindowsCredentialStore());
+        var vm = new MainViewModel(service, demo ? new InMemoryCredentialStore() : new WindowsCredentialStore(),
+            demo ? new InMemorySettingsStore() : new SettingsStore());
         // --update-feed <folder or address>: Velopack packages to update from instead of GitHub,
         // for trying an update without publishing one.
         _updates = new UpdateService(ArgumentAfter(e.Args, "--update-feed"));

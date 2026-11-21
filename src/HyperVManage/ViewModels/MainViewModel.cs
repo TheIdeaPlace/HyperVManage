@@ -17,10 +17,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _reading;
 
+    private readonly ISettingsStore _settingsStore;
+    private readonly SettingsData _settings;
+
     /// <param name="credentials">Where VMs' sign-ins for screenshots are kept; in memory if not given.</param>
-    public MainViewModel(IHyperVService hyperV, IGuestCredentialStore? credentials = null)
+    /// <param name="settings">Where the columns and the last location are remembered; in memory if not given.</param>
+    public MainViewModel(IHyperVService hyperV, IGuestCredentialStore? credentials = null, ISettingsStore? settings = null)
     {
         _hyperV = hyperV;
+        _settingsStore = settings ?? new InMemorySettingsStore();
+        _settings = _settingsStore.Load();
+        _rowFormat = new VmRowFormat(VmColumns.Set.Defs(VmColumns.Set.Reconcile(_settings.VmListColumns)), _settings.SpeakColumnNames ?? true);
         Screenshots = new ScreenshotTaker(hyperV, credentials ?? new InMemoryCredentialStore());
         Checkpoints.CollectionChanged += (_, _) =>
         {
@@ -48,8 +55,69 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// to the new one rather than leaving it nowhere.</summary>
     public event Action? SelectionReplaced;
 
+    // ── Columns and remembered choices ───────────────────────────────────────
+
+    private VmRowFormat _rowFormat;
+
+    /// <summary>The columns the list shows, in order, and whether their names are spoken; every
+    /// row's accessible name is made from it, so what's heard is what's on screen.</summary>
+    public VmRowFormat RowFormat => _rowFormat;
+
+    /// <summary>Raised when the columns change, for the window to rebuild the list's columns.</summary>
+    public event Action? ColumnsChanged;
+
+    /// <summary>Shows these columns, in this order, and saves them. Unknown ids are dropped, and at
+    /// least one column always stays.</summary>
+    public void ApplyColumns(IEnumerable<string> ids, bool speakNames)
+    {
+        var shown = VmColumns.Set.Reconcile(ids);
+        _rowFormat = new VmRowFormat(VmColumns.Set.Defs(shown), speakNames);
+        foreach (var vm in Vms) vm.RowFormat = _rowFormat;
+        _settings.VmListColumns = [.. shown];
+        _settings.SpeakColumnNames = speakNames;
+        SaveSettings();
+        ColumnsChanged?.Invoke();
+    }
+
+    /// <summary>The widths the user has dragged columns to, by column id.</summary>
+    public IReadOnlyDictionary<string, double> ColumnWidths => _settings.VmListColumnWidths ?? [];
+
+    /// <summary>Keeps column widths for next time; saved with the next save, or now if asked.</summary>
+    public void RememberColumnWidths(IReadOnlyDictionary<string, double> widths, bool saveNow = false)
+    {
+        var all = new Dictionary<string, double>(ColumnWidths);
+        foreach (var (id, width) in widths)
+            if (VmColumns.Set.Find(id) is not null && double.IsFinite(width) && width > 0) all[id] = Math.Round(width);
+        _settings.VmListColumnWidths = all;
+        if (saveNow) SaveSettings();
+    }
+
+    /// <summary>The folder New VM and Clone offer: the one used last, or empty for Hyper-V's default folders.</summary>
+    public string VmLocation
+    {
+        get => _settings.VmLocation ?? "";
+        set
+        {
+            var location = LocationText.Normalize(value);
+            if (location == VmLocation) return;
+            _settings.VmLocation = location;
+            SaveSettings();
+        }
+    }
+
+    /// <summary>The location to fill in for New VM and Clone: the last one, unless it can't be used
+    /// now (its drive is unplugged, say), when it's Hyper-V's default folders rather than a box that
+    /// has to be cleared before anything works.</summary>
+    public string OfferedLocation => CheckLocation(VmLocation) is null ? VmLocation : "";
+
+    /// <summary>Checks a location; swapped in tests, which can't count on the drives.</summary>
+    internal Func<string, string?> CheckLocation { get; set; } = l => NewVmScript.LocationProblem(l);
+
+    /// <summary>A save that fails isn't undone for the session; the next save tries again.</summary>
+    internal bool SaveSettings() => _settingsStore.Save(_settings);
+
     // The window answers these. Null means the user cancelled.
-    public Func<VmInfo, string?>? RequestCloneName { get; set; }
+    public Func<VmInfo, string, CloneRequest?>? RequestClone { get; set; }
     public Func<VmInfo, string?>? RequestCheckpointName { get; set; }
     /// <summary>Asked which of the VM's checkpoints to apply, newest first, with the one chosen in
     /// the checkpoint list already chosen, or null to start from the newest.</summary>
@@ -170,7 +238,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var vm in fresh)
         {
             var existing = Vms.FirstOrDefault(v => v.Id == vm.Id);
-            if (existing is null) Vms.Add(vm);
+            if (existing is null)
+            {
+                vm.RowFormat = _rowFormat;
+                Vms.Add(vm);
+            }
             else existing.UpdateFrom(vm);
         }
         IsEmpty = Vms.Count == 0;
@@ -343,16 +415,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private Task Clone()
     {
         var vm = Selected!;
-        var name = RequestCloneName?.Invoke(vm)?.Trim();
-        if (string.IsNullOrEmpty(name)) return Task.CompletedTask;
+        if (RequestClone?.Invoke(vm, OfferedLocation) is not { } request) return Task.CompletedTask;
+        var name = request.Name.Trim();
+        var location = LocationText.Normalize(request.Location);
         if (NewVmScript.NameProblem(name) is { } problem)
         {
             StatusText = problem;
             Announce?.Invoke(problem);
             return Task.CompletedTask;
         }
-        return RunAsync(vm, $"Cloning {vm.Name} as {name}. This copies the whole disk and can take several minutes.",
-            v => _hyperV.CloneAsync(v.Id, name), v => $"{name} is ready, a copy of {v.Name}.");
+        VmLocation = location;
+        var where = location.Length == 0 ? "" : $" in {NewVmScript.VmFolder(location, name)}";
+        return RunAsync(vm, $"Cloning {vm.Name} as {name}{where}. This copies the whole disk and can take several minutes.",
+            v => _hyperV.CloneAsync(v.Id, name, location.Length == 0 ? null : location), v => $"{name} is ready, a copy of {v.Name}{where}.");
     }
 
     /// <summary>Only from off or saved: a copy of a running VM would join the network as a
@@ -433,3 +508,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
 /// <summary>The checkpoint to apply, and whether to keep how the VM is now as a checkpoint first.</summary>
 public sealed record CheckpointChoice(CheckpointInfo Checkpoint, bool SaveCurrentFirst);
+
+/// <summary>A clone's name, and where to keep it: empty for Hyper-V's default folders.</summary>
+public sealed record CloneRequest(string Name, string Location);

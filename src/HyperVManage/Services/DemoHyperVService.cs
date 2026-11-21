@@ -13,7 +13,7 @@ public sealed class DemoHyperVService : IHyperVService
     [
         Make("Win11-RDP", "Running", "External Wi-Fi", ["10.0.0.41"], 4, 4096, 3120),
         Make("Test2", "Off", "Default Switch", [], 2, 4096, 0),
-        Make("Build Agent", "Saved", "External Wi-Fi", [], 4, 8192, 0),
+        Make("Build Agent", "Saved", "External Wi-Fi", [], 4, 8192, 0, @"D:\Hyper-V"),
     ];
     private readonly List<SwitchInfo> _switches =
     [
@@ -34,13 +34,31 @@ public sealed class DemoHyperVService : IHyperVService
     /// <summary>How long each pretend operation takes. Zero in tests.</summary>
     public TimeSpan Delay { get; init; } = TimeSpan.FromMilliseconds(600);
 
-    private static VmInfo Make(string name, string state, string sw, string[] ips, int cpus, long mb, long assigned) =>
-        new(Guid.NewGuid().ToString()) // demo ids
+    /// <summary>Hyper-V's own default folders, where a VM goes unless it's given a location.</summary>
+    internal const string DefaultVmFolder = @"C:\ProgramData\Microsoft\Windows\Hyper-V";
+    internal const string DefaultDiskFolder = @"C:\ProgramData\Microsoft\Windows\Virtual Hard Disks";
+
+    /// <param name="location">A folder chosen for the VM, as New VM and Clone use it: the VM goes
+    /// in a folder of its own there. Null for Hyper-V's default folders.</param>
+    private static VmInfo Make(string name, string state, string sw, string[] ips, int cpus, long mb, long assigned, string? location = null)
+    {
+        var vm = new VmInfo(Guid.NewGuid().ToString()) // demo ids
         {
             Name = name, State = state, SwitchName = sw, IpAddresses = ips, ProcessorCount = cpus,
             MemoryStartupMB = mb, MemoryAssignedMB = assigned, DynamicMemory = true, Generation = 2,
             AutomaticStartAction = "Start",
         };
+        Place(vm, location);
+        return vm;
+    }
+
+    private static void Place(VmInfo vm, string? location)
+    {
+        var folder = string.IsNullOrEmpty(location) ? null : System.IO.Path.Combine(location, vm.Name);
+        vm.Location = folder ?? DefaultVmFolder;
+        var disks = folder is null ? DefaultDiskFolder : System.IO.Path.Combine(folder, "Virtual Hard Disks");
+        vm.DiskPaths = [System.IO.Path.Combine(disks, vm.Name + ".vhdx")];
+    }
 
     public Task<IReadOnlyList<VmInfo>> GetVmsAsync(CancellationToken ct = default)
     {
@@ -192,7 +210,7 @@ public sealed class DemoHyperVService : IHyperVService
         }
     }
 
-    public async Task CloneAsync(string vmId, string newName, CancellationToken ct = default)
+    public async Task CloneAsync(string vmId, string newName, string? location = null, CancellationToken ct = default)
     {
         await Task.Delay(Delay, ct);
         lock (_gate)
@@ -208,6 +226,7 @@ public sealed class DemoHyperVService : IHyperVService
             copy.IpAddresses = [];
             copy.MemoryAssignedMB = 0;
             copy.CheckpointCount = 0;
+            Place(copy, location);
             _vms.Add(copy);
         }
     }
@@ -215,7 +234,7 @@ public sealed class DemoHyperVService : IHyperVService
     public Task<IReadOnlyList<string>> GetDiskPathsAsync(string vmId, CancellationToken ct = default)
     {
         lock (_gate)
-            return Task.FromResult<IReadOnlyList<string>>([$@"C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\{Find(vmId).Name}.vhdx"]);
+            return Task.FromResult<IReadOnlyList<string>>(Find(vmId).DiskPaths.ToList());
     }
 
     public async Task<DeleteResult> DeleteAsync(string vmId, CancellationToken ct = default)

@@ -83,6 +83,17 @@
     Use the Default Switch instead, as earlier versions did. The VM can then be
     reached only from this PC, and nothing about this PC's networking changes.
 
+.PARAMETER Location
+    A folder to keep the virtual machine in, such as D:\Hyper-V on another
+    drive. The VM gets a folder of its own there, named after it, with its
+    settings inside and its disks in that folder's Virtual Hard Disks, as
+    Hyper-V Manager lays out a VM it's told where to keep. The drive must be
+    formatted NTFS or ReFS. Leave it out to use Hyper-V's own default folders.
+
+.PARAMETER VhdFolder
+    The folder for the VM's virtual disk, if it should differ from where
+    -Location, or Hyper-V's default, would put it.
+
 .PARAMETER NoAutoStart
     Don't start the VM when this PC starts. By default it starts every time,
     so turning the PC on is enough to be able to connect.
@@ -99,6 +110,9 @@
 
 .EXAMPLE
     .\New-HyperVRdpVM.ps1 -Ubuntu
+
+.EXAMPLE
+    .\New-HyperVRdpVM.ps1 -VMName Test3 -Location D:\Hyper-V
 
 .EXAMPLE
     .\New-HyperVRdpVM.ps1 -VMName Test2 -Remove
@@ -124,6 +138,7 @@ param(
     [ValidateRange(2, 512)]
     [int]$MemoryGB = 4,
     [string]$SwitchName,
+    [string]$Location,
     [string]$VhdFolder,
     [string]$Locale,
     [string]$TimeZone = (Get-TimeZone).Id,
@@ -186,8 +201,9 @@ function Assert-Room([uint64]$Needed, [string]$What, [string]$Folder, [Nullable[
         # Whole numbers, needed rounded up and free down, so the two never sound the same.
         $neededGB = [Math]::Ceiling($Needed / 1GB)
         $freeGB = [Math]::Floor($Free / 1GB)
-        throw ("{0} needs about {1} GB free for the VM's disk, in {2}, and there's only {3} GB there. Make room, or choose another folder for virtual hard disks in Hyper-V Settings (or with -VhdFolder), and run the script again." -f
-            $What, $neededGB, $Folder, $freeGB)
+        $elsewhere = if ($Location) { 'choose another location (-Location)' } else { 'choose another folder for virtual hard disks in Hyper-V Settings (or with -Location or -VhdFolder)' }
+        throw ("{0} needs about {1} GB free for the VM's disk, in {2}, and there's only {3} GB there. Make room, or {4}, and run the script again." -f
+            $What, $neededGB, $Folder, $freeGB, $elsewhere)
     }
 }
 
@@ -292,10 +308,24 @@ if ($Remove) {
         $vmId = $vm.Id
         $ips = @(Get-VMNetworkAdapter -VM $vm | ForEach-Object { $_.IPAddresses })
         if ($vm.State -ne 'Off') { Say "Turning off $VMName."; Stop-VM -VM $vm -TurnOff -Force }
+        # The disk each drive's chain of checkpoint disks ends in, read before the checkpoints go:
+        # Hyper-V merges them in the background, and for a moment after, the drive can still name
+        # a checkpoint disk that has already gone, which would leave the real disk behind.
+        $bases = @(Get-VMHardDiskDrive -VM $vm | ForEach-Object {
+            $p = [string]$_.Path
+            while ($p) {
+                $parent = (Get-VHD -Path $p -ErrorAction SilentlyContinue).ParentPath
+                if (-not $parent) { break }
+                $p = $parent
+            }
+            $p
+        } | Where-Object { $_ })
         Get-VMSnapshot -VM $vm -ErrorAction SilentlyContinue | Remove-VMSnapshot -IncludeAllChildSnapshots -ErrorAction SilentlyContinue
         $mergeDeadline = (Get-Date).AddMinutes(5)
-        while ((Get-VM -Id $vm.Id).Status -match 'Merging' -and (Get-Date) -lt $mergeDeadline) { Start-Sleep -Seconds 2 }
-        $disks = @(Get-VMHardDiskDrive -VM $vm | Select-Object -ExpandProperty Path)
+        while ((Get-Date) -lt $mergeDeadline -and ((Get-VM -Id $vm.Id).Status -match 'Merging' -or
+               (Get-VMHardDiskDrive -VM $vm | Where-Object { $_.Path -like '*.avhdx' }))) { Start-Sleep -Seconds 2 }
+        $disks = @(@(Get-VMHardDiskDrive -VM $vm | Select-Object -ExpandProperty Path) + $bases |
+            Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Sort-Object -Unique)
     } else {
         $vm = $null
         Say "There is no virtual machine named $VMName. Looking for anything a failed run left behind."
@@ -304,7 +334,7 @@ if ($Remove) {
     # A run that failed after the disk was built but before the VM existed
     # leaves the disk behind, and the next run refuses to overwrite it.
     # An Ubuntu build stopped partway can leave its installer disk too.
-    $folder = if ($VhdFolder) { $VhdFolder } else { (Get-VMHost).VirtualHardDiskPath }
+    $folder = if ($VhdFolder) { $VhdFolder } elseif ($Location) { Join-Path (Join-Path $Location $VMName) 'Virtual Hard Disks' } else { (Get-VMHost).VirtualHardDiskPath }
     foreach ($leftover in @((Join-Path $folder "$VMName.vhdx"), (Join-Path $folder "$VMName-installer.vhd"))) {
         if ((Test-Path -LiteralPath $leftover) -and -not ($disks | Where-Object { $_ -and $_.ToLowerInvariant() -eq $leftover.ToLowerInvariant() })) {
             $disks += $leftover
@@ -324,6 +354,15 @@ if ($Remove) {
         }
     }
 
+    # The folder of its own a VM made with -Location has, named after it: the one Hyper-V says
+    # it's kept in, or failing that the one -Location names. Never Hyper-V's own folders.
+    $ownFolder = $null
+    $vmHostPaths = @((Get-VMHost).VirtualMachinePath, (Get-VMHost).VirtualHardDiskPath) | ForEach-Object { $_.TrimEnd('\') }
+    $candidate = if ($vm -and $vm.Path) { [string]$vm.Path } elseif ($Location) { Join-Path $Location $VMName } else { $null }
+    if ($candidate -and (Split-Path -Leaf $candidate.TrimEnd('\')) -eq $VMName -and ($vmHostPaths -notcontains $candidate.TrimEnd('\'))) {
+        $ownFolder = $candidate
+    }
+
     if ($vm) {
         Say "Deleting the virtual machine $VMName."
         Remove-VM -VM $vm -Force
@@ -334,6 +373,13 @@ if ($Remove) {
         Say "Deleting the virtual disk $d."
         try { Remove-Item -LiteralPath $d -Force -ErrorAction Stop }
         catch { Say "Couldn't delete $d. $($_.Exception.Message)" }
+    }
+    # Only once no files are left anywhere in it, so nothing else kept there is lost.
+    if ($ownFolder -and (Test-Path -LiteralPath $ownFolder -PathType Container) -and
+        -not (Get-ChildItem -LiteralPath $ownFolder -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        Say "Deleting the folder $ownFolder, which is now empty."
+        try { Remove-Item -LiteralPath $ownFolder -Recurse -Force -ErrorAction Stop }
+        catch { Say "Couldn't delete $ownFolder. $($_.Exception.Message)" }
     }
     # Only the connection file this script made: one that connects to this VM.
     if (Test-Path -LiteralPath $rdpFile) {
@@ -409,6 +455,32 @@ if (-not $Ubuntu -and $Edition -match 'Home') {
 if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
     throw "A virtual machine named $VMName already exists. Pick another name with -VMName, or delete it with -Remove."
 }
+# --- Location (begin)
+# Hyper-V refuses a VM's files on FAT32 or exFAT, as many external drives come formatted, but only
+# once the disk is being made; and a drive that isn't plugged in fails with a puzzling path error.
+if ($Location) {
+    if ($Location -notmatch '^([A-Za-z]:\\|\\\\[^\\]+\\[^\\]+)') {
+        throw "The location must be a full path to a folder, such as D:\Hyper-V, not '$Location'."
+    }
+    $locationRoot = [IO.Path]::GetPathRoot($Location)
+    if (-not (Test-Path -LiteralPath $locationRoot)) {
+        throw "Can't reach $locationRoot, where the location $Location is. Plug the drive in or connect to the share, or choose another location."
+    }
+    if ($locationRoot -match '^[A-Za-z]:\\$') {
+        # Hyper-V's own service can't see drive letters mapped for a user; the share's path works.
+        if ([IO.DriveInfo]::new($locationRoot).DriveType -eq 'Network') {
+            throw "$locationRoot is a mapped network drive, which Hyper-V can't use. Pass the share's own path instead, such as \\server\share\Hyper-V."
+        }
+        $format = [IO.DriveInfo]::new($locationRoot).DriveFormat
+        if ($format -notin 'NTFS', 'ReFS') {
+            throw "Hyper-V can only keep a virtual machine on a drive formatted NTFS or ReFS, and $locationRoot is $format. Choose a folder on another drive, or reformat this one as NTFS."
+        }
+    }
+    if (Test-Path -LiteralPath $Location -PathType Leaf) {
+        throw "$Location is a file, not a folder. Choose a folder for the location."
+    }
+}
+# --- Location (end)
 
 # --- Network -------------------------------------------------------------------
 # By default the VM joins this PC's own network through an external switch, so
@@ -499,7 +571,19 @@ if ($IsoPath) {
     $IsoPath = (Resolve-Path -LiteralPath $IsoPath).Path
 }
 
-if (-not $VhdFolder) { $VhdFolder = (Get-VMHost).VirtualHardDiskPath }
+if (-not $VhdFolder) {
+    $VhdFolder = if ($Location) { Join-Path (Join-Path $Location $VMName) 'Virtual Hard Disks' } else { (Get-VMHost).VirtualHardDiskPath }
+}
+# The VM's own folder in its location, if this run makes it: a build that fails before the VM
+# exists removes it again once it's empty, so it doesn't sit there empty on the drive.
+$ownFolder = if ($Location) { Join-Path $Location $VMName } else { $null }
+$madeOwnFolder = [bool]($ownFolder -and -not (Test-Path -LiteralPath $ownFolder))
+function Remove-MadeFolder {
+    if ($madeOwnFolder -and (Test-Path -LiteralPath $ownFolder -PathType Container) -and
+        -not (Get-ChildItem -LiteralPath $ownFolder -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        Remove-Item -LiteralPath $ownFolder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 New-Item -ItemType Directory -Path $VhdFolder -Force | Out-Null
 $vhdPath = Join-Path $VhdFolder "$VMName.vhdx"
 if (Test-Path -LiteralPath $vhdPath) {
@@ -538,6 +622,7 @@ function Add-NetworkSwitch([string[]]$RemoveOnFailure) {
     } catch {
         # Leave nothing that would block a second run: the disks go too.
         foreach ($disk in $RemoveOnFailure) { Remove-Item -LiteralPath $disk -Force -ErrorAction SilentlyContinue }
+        Remove-MadeFolder
         throw "Couldn't create the switch $SwitchName on $($createSwitchOn.Name): $($_.Exception.Message) If this PC has lost its network connection, remove what was made with: Remove-VMSwitch -Name '$SwitchName' -Force. Then run the script again, or add -HostOnly to keep the VM on this PC only."
     }
     # Wait for this PC's own connection to come back, now through the switch.
@@ -558,7 +643,16 @@ function Add-NetworkSwitch([string[]]$RemoveOnFailure) {
 # is left to the caller to set once the VM is ready: an Ubuntu VM still holding its installer
 # disk would install itself over again if the PC restarted first.
 function New-BaseVM([switch]$Later) {
-    New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ([int64]$MemoryGB * 1GB) -VHDPath $vhdPath -SwitchName $SwitchName | Out-Null
+    # -Path makes the VM's own folder, named after it, there; its settings go in it.
+    $where = if ($Location) { @{ Path = $Location } } else { @{} }
+    New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ([int64]$MemoryGB * 1GB) -VHDPath $vhdPath -SwitchName $SwitchName @where | Out-Null
+    if ($Location) {
+        # Checkpoints' saved state and smart paging stay with the VM too, not on the system drive.
+        # (Checkpoint disks always go beside the VM's own disk.) New-VM -Path does this already;
+        # said here so it never depends on that.
+        $own = Join-Path $Location $VMName
+        Set-VM -Name $VMName -SnapshotFileLocation $own -SmartPagingFilePath $own
+    }
     Set-VMProcessor -VMName $VMName -Count $ProcessorCount
     Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes 2GB -StartupBytes ([int64]$MemoryGB * 1GB) -MaximumBytes ([int64][Math]::Max($MemoryGB * 2, 8) * 1GB)
     Set-VM -Name $VMName -AutomaticCheckpointsEnabled $false
@@ -1429,6 +1523,7 @@ sync
         [NewVmSeedDisk]::Write($seedPath, 'CIDATA', $files, 24)
     } catch {
         Remove-Item -LiteralPath $vhdPath, $seedPath -Force -ErrorAction SilentlyContinue
+        Remove-MadeFolder
         throw
     }
 
@@ -1961,6 +2056,7 @@ finally {
     if ($isoMounted) { Dismount-DiskImage -ImagePath $IsoPath -ErrorAction SilentlyContinue | Out-Null }
     if (-not $vhdDone -and (Test-Path -LiteralPath $vhdPath)) {
         Remove-Item -LiteralPath $vhdPath -Force -ErrorAction SilentlyContinue
+        Remove-MadeFolder
     }
 }
 

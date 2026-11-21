@@ -73,7 +73,7 @@ public class WindowTests
             var names = peer.GetChildren().Where(c => c.GetAutomationControlType() is AutomationControlType.ListItem or AutomationControlType.DataItem)
                             .Select(c => c.GetName()).ToList();
             Assert.Equal(vm.Vms.Select(v => v.AccessibleName), names);
-            Assert.Contains("Win11-RDP, Running, 10.0.0.41, External Wi-Fi", names);
+            Assert.Contains(names, n => n.StartsWith("Win11-RDP, Running, Address: 10.0.0.41, Network: External Wi-Fi", StringComparison.Ordinal));
 
             // And from the container itself, so a correct ToString can't hide a missing setter.
             var row = (ListViewItem)list.ItemContainerGenerator.ContainerFromIndex(0);

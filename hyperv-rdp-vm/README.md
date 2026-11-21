@@ -198,7 +198,8 @@ Start-VM SURFACEPRO7-Win11
 | `-SwitchName`     | an external switch     | Hyper-V virtual switch. Left out, the VM joins your network through an external switch, created if there isn't one |
 | `-HostOnly`       | off                    | Use the Default Switch: only this PC can reach the VM |
 | `-NoAutoStart`    | off                    | Don't start the VM when this PC starts         |
-| `-VhdFolder`      | Hyper-V's disk folder  | Where the virtual disk goes                    |
+| `-Location`       | Hyper-V's own folders  | A folder to keep the VM in, such as `D:\Hyper-V` on an external SSD. The VM gets a folder of its own there, named after it, with its disk in that folder's `Virtual Hard Disks`. The drive must be NTFS or ReFS; one that isn't there, or is exFAT or FAT32, is refused before anything is built. `-Remove -Location` removes the VM's folder once it's empty |
+| `-VhdFolder`      | Hyper-V's disk folder, or the one `-Location` makes | Where the virtual disk goes, if it should differ |
 | `-TimeZone`       | this PC's time zone    | Windows time zone name                         |
 | `-Locale`         | the ISO's language     | Language for formats and the keyboard, such as `en-GB` |
 | `-TimeoutMinutes` | 45, or 90 for Ubuntu   | How long to wait for Windows to finish setting up, or Ubuntu to install |

@@ -39,9 +39,12 @@ public sealed partial class NewVmViewModel : ObservableObject
 
     /// <param name="isoHistory">The ISOs built from before; none if not given.</param>
     /// <param name="ubuntu">Build an Ubuntu desktop rather than Windows.</param>
-    public NewVmViewModel(IEnumerable<string> existingNames, IIsoHistory? isoHistory = null, bool ubuntu = false)
+    /// <param name="location">The folder to offer for the VM, the one used last; empty for Hyper-V's
+    /// default folders.</param>
+    public NewVmViewModel(IEnumerable<string> existingNames, IIsoHistory? isoHistory = null, bool ubuntu = false, string location = "")
     {
         IsUbuntu = ubuntu;
+        _location = location;
         _isoHistory = isoHistory ?? new InMemoryIsoHistory();
         _taken = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
         // This PC's name first, as the script does, so VMs made on different PCs on one network
@@ -97,8 +100,21 @@ public sealed partial class NewVmViewModel : ObservableObject
     /// edition, -Win11 or -Server; once the user has typed their own, it's left alone.</summary>
     private string _suggestedName;
 
-    [ObservableProperty] private string _vmName;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(LocationDescription))] private string _vmName;
     [ObservableProperty] private string _isoPath;
+
+    /// <summary>The folder to keep the VM in; empty for Hyper-V's own default folders.</summary>
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(LocationDescription))] private string _location;
+
+    /// <summary>Where the VM will go, said after the Location box's name, so it's heard on arriving
+    /// there and changes as the name or location does.</summary>
+    public string LocationDescription => LocationText.Describe(Location, VmName);
+
+    /// <summary>Checks a location before a build; swapped in tests, which can't count on the drives.</summary>
+    internal Func<string, string?> CheckLocation { get; set; } = l => NewVmScript.LocationProblem(l);
+
+    /// <summary>Told the location a build starts with, so the next New VM or Clone offers it.</summary>
+    public Action<string>? LocationChosen { get; set; }
     [ObservableProperty] private string _edition = "Windows 11 Pro";
 
     /// <summary>The display names of the editions in the chosen ISO, once read; empty until then,
@@ -367,6 +383,7 @@ public sealed partial class NewVmViewModel : ObservableObject
         // than as a failed build.
         var computer = RemoteDesktop.ComputerName(name);
         var user = UserName.Trim();
+        var location = LocationText.Normalize(Location);
         var maxProcessors = Math.Min(Environment.ProcessorCount, 64);
         var system = IsUbuntu ? "Ubuntu" : "Windows";
         if (NewVmScript.NameProblem(name) is { } nameProblem) problem = nameProblem;
@@ -395,12 +412,13 @@ public sealed partial class NewVmViewModel : ObservableObject
         // Known only once the ISO has been read; otherwise the build checks it.
         else if (IsWindows && EditionsOf(iso) is { Count: > 0 } known && !known.Any(e => e.Matches(Edition)))
             problem = $"This ISO has no edition called {Edition.Trim()}. Choose one from the Edition list.";
+        else if (CheckLocation(location) is { } locationProblem) problem = locationProblem;
 
         Error = problem ?? "";
         if (problem is not null) return null;
         return new NewVmOptions(name, iso, IsUbuntu ? "" : Edition.Trim(), UserName.Trim(), Password,
             int.Parse(Processors.Trim()), int.Parse(MemoryGB.Trim()), int.Parse(DiskGB.Trim()),
-            HostOnly, AutoStart, ConnectWhenDone, IsUbuntu, Orca);
+            HostOnly, AutoStart, ConnectWhenDone, IsUbuntu, Orca, location);
     }
 
     [RelayCommand(CanExecute = nameof(CanCreate))]
@@ -420,6 +438,7 @@ public sealed partial class NewVmViewModel : ObservableObject
         // Remembered as the build starts, so it's offered first next time, even if this one fails.
         // Ubuntu's ISO is the script's own download, so there is none to remember.
         if (IsWindows) _isoHistory.Remember(options.IsoPath);
+        LocationChosen?.Invoke(options.Location);
         HasStarted = true;
         IsRunning = true;
         _stop = new CancellationTokenSource();

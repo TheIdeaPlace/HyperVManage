@@ -62,7 +62,7 @@ public class SecondReviewTests
         vm.Selected = vm.Vms.Single(v => v.State == "Off");
         var said = new List<string>();
         vm.Announce += said.Add;
-        vm.RequestCloneName = _ => "..";
+        vm.RequestClone = (_, _) => new CloneRequest("..", "");
 
         await vm.CloneCommand.ExecuteAsync(null);
 

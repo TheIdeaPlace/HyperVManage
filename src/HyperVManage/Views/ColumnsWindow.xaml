@@ -1,0 +1,55 @@
+<Window x:Class="HyperVManage.Views.ColumnsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Columns" Width="620" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <StackPanel Margin="14">
+        <!-- Tab order is the order on screen, left to right. The dialog opens on the Shown list. -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="200"/>
+            </Grid.RowDefinitions>
+
+            <Label Grid.Column="0" Content="A_vailable columns:" Target="{Binding ElementName=AvailableList}" Padding="0,0,0,4"/>
+            <ListBox x:Name="AvailableList" Grid.Column="0" Grid.Row="1"
+                     ItemsSource="{Binding Available}" AutomationProperties.Name="Available columns"
+                     PreviewKeyDown="AvailableList_PreviewKeyDown"/>
+            <StackPanel Grid.Column="1" Grid.Row="1" Margin="8,0" VerticalAlignment="Top">
+                <Button Content="_Add" Padding="8,2" Click="Add_Click"/>
+            </StackPanel>
+
+            <Label Grid.Column="2" Content="S_hown columns:" Target="{Binding ElementName=ShownList}" Padding="0,0,0,4"/>
+            <ListBox x:Name="ShownList" Grid.Column="2" Grid.Row="1"
+                     ItemsSource="{Binding Shown}" AutomationProperties.Name="Shown columns"
+                     PreviewKeyDown="ShownList_PreviewKeyDown"/>
+            <StackPanel Grid.Column="3" Grid.Row="1" Margin="8,0,0,0">
+                <Button Content="_Remove" Margin="0,0,0,4" Padding="8,2" Click="Remove_Click"/>
+                <Button Content="Move _Up" Margin="0,0,0,4" Padding="8,2" Click="MoveUp_Click"/>
+                <Button Content="Move _Down" Margin="0,0,0,4" Padding="8,2" Click="MoveDown_Click"/>
+                <Button Content="Move to _Top" Margin="0,0,0,4" Padding="8,2" Click="MoveTop_Click"/>
+                <Button Content="Move to _Bottom" Margin="0,0,0,4" Padding="8,2" Click="MoveBottom_Click"/>
+            </StackPanel>
+        </Grid>
+
+        <Button Content="R_eset to Default" HorizontalAlignment="Left" Margin="0,8,0,0" Padding="8,2" Click="Reset_Click"/>
+        <CheckBox Content="_Speak column names" Margin="0,10,0,0" IsChecked="{Binding SpeakNames}"/>
+
+        <!-- Read-only, but with a caret, so JAWS and NVDA can read it a word at a time. Changes to it
+             are never announced: each action already says what happened. -->
+        <Label Content="_Preview, the selected virtual machine as it will be read:" Target="{Binding ElementName=PreviewBox}" Padding="0,10,0,4"/>
+        <TextBox x:Name="PreviewBox" AutomationProperties.Name="Preview" IsReadOnly="True" IsReadOnlyCaretVisible="True"
+                 TextWrapping="Wrap" Text="{Binding Preview, Mode=OneWay}"/>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button Content="OK" IsDefault="True" MinWidth="80" Margin="0,0,8,0" Click="Ok_Click"/>
+            <Button Content="Cancel" IsCancel="True" MinWidth="80"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

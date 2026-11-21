@@ -32,6 +32,10 @@
                 <Separator/>
                 <MenuItem Header="E_xit" Click="Exit_Click"/>
             </MenuItem>
+            <!-- W, since the VM menu already has V. -->
+            <MenuItem Header="Vie_w">
+                <MenuItem Header="_Columns…" Click="Columns_Click"/>
+            </MenuItem>
             <MenuItem Header="_VM" x:Name="VmMenu">
                 <MenuItem Header="_Connect with Remote Desktop" Command="{Binding ConnectCommand}" InputGestureText="Enter"/>
                 <MenuItem Header="Open Conso_le" Command="{Binding OpenConsoleCommand}"/>
@@ -128,15 +132,10 @@
                     </Style>
                 </ListView.ItemContainerStyle>
                 <ListView.View>
-                    <GridView>
-                        <GridViewColumn Header="Name" Width="170" DisplayMemberBinding="{Binding Name}"/>
-                        <GridViewColumn Header="State" Width="100" DisplayMemberBinding="{Binding StateText}"/>
-                        <GridViewColumn Header="Address" Width="120" DisplayMemberBinding="{Binding AddressText}"/>
-                        <GridViewColumn Header="Network" Width="140" DisplayMemberBinding="{Binding SwitchName}"/>
-                        <GridViewColumn Header="Memory" Width="100" DisplayMemberBinding="{Binding MemoryText}"/>
-                        <GridViewColumn Header="Processors" Width="80" DisplayMemberBinding="{Binding ProcessorCount}"/>
-                        <GridViewColumn Header="Starts with PC" Width="140" DisplayMemberBinding="{Binding StartsWithPcText}"/>
-                    </GridView>
+                    <!-- The columns come from View, Columns… and are made in code, in the order the
+                         row's name is read (MainWindow.BuildColumns). -->
+                    <!-- No dragging headers: that would reorder the screen but not what's read. -->
+                    <GridView x:Name="VmGrid" AllowsColumnReorder="False"/>
                 </ListView.View>
             </ListView>
 
