@@ -21,7 +21,10 @@ public partial class ColumnsWindow : Window
         InitializeComponent();
         _vm = vm;
         DataContext = vm;
-        Loaded += (_, _) => FocusShown(0);
+        // The first column chosen straight away, so it's chosen even before the dialog is shown;
+        // focus on it once the list has made its rows, which it hasn't yet when Loaded is raised.
+        ShownList.SelectedIndex = vm.Shown.Count > 0 ? 0 : -1;
+        Loaded += (_, _) => Dispatcher.BeginInvoke(() => FocusShown(0), DispatcherPriority.Input);
     }
 
     /// <summary>Opens the dialog; true if OK was chosen, with the choices left in the view model.</summary>

@@ -13,6 +13,16 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
 
 - Lists every VM with its state, address, network, memory, processors and whether it starts
   with the PC. The list refreshes itself every ten seconds without moving your place in it.
+- **View, Columns…** (Alt+W, C) chooses the list's columns and their order: those above, and
+  **Location** (the folder the VM is kept in), **Disks** (its virtual hard disk files) and
+  **Checkpoints**. Each row is read as its columns, in the order they're shown, so what you hear
+  is what's on screen. With **Speak column names** on, as it is to begin with, each column but
+  the first is read with its name ("Network: External Wi-Fi"); state and checkpoint counts never
+  are, since they already say what they are. In the dialog, Enter in Available adds a column;
+  in Shown, Delete removes one, Alt+Up and Alt+Down move it, and Alt+Home and Alt+End move it to
+  the top or bottom; each says what happened. The Preview shows the selected VM as it will be
+  read. Columns, their order and the widths you drag them to are kept in
+  `%AppData%\HyperVManage\settings.json`.
 - **Connect with Remote Desktop**, the way to hear a VM with a screen reader. It opens the
   connection file the script left on your desktop if there is one, so the saved sign-in is
   used; otherwise it makes a connection to the VM's name, which keeps working when its address
@@ -74,10 +84,23 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
     you uncheck it, how the VM is now is kept as a checkpoint first, so nothing is lost for good.
   - Clone works on a VM that is off or saved, since a copy of a running one would join the
     network as a second machine with the same name. Windows inside the copy keeps the same
-    computer name; rename it there before running both.
+    computer name; rename it there before running both. It asks for the copy's name and its
+    **Location** (see below), and checks first that there's room there for the copy and the
+    temporary export it's made from.
   - Delete asks first, naming the disk files it will remove. It keeps any disk another VM uses
     or depends on, and only removes a desktop connection file that connects to this VM. It says
-    afterwards what it kept and anything it couldn't delete.
+    afterwards what it kept and anything it couldn't delete. A VM kept in a location of its own
+    has its folder removed too, once nothing is left in it.
+- **Location**: New Windows Virtual Machine, New Ubuntu Virtual Machine and Clone have a Location
+  box, with Choose Folder (Alt+F) beside it, for keeping the VM somewhere other than Hyper-V's
+  own folders on the system drive: a folder on an external SSD, say. The VM gets a folder of its
+  own there, named after it, with its settings inside and its disks in that folder's Virtual Hard
+  Disks, as Hyper-V Manager lays out a VM you tell it where to keep. The sentence under the box,
+  also read as its description, says where the VM will go. Leave it empty for Hyper-V's default
+  folders. The location you used last is offered next time, unless its drive isn't there. Hyper-V
+  can only keep a VM on a drive formatted NTFS or ReFS, so a drive formatted exFAT, as many
+  external drives come, is refused before anything is built, with a note saying so. Shut down or
+  save a VM before unplugging the drive it's on. The Location column shows where each VM is.
 - **ISOs used before**: New Windows Virtual Machine's Windows ISO is a list of the ISOs you've built VMs
   from, the most recent first and already chosen, then the newest Windows ISO in your Downloads
   folder, then Browse for an ISO. Arrow through it, or open it with Alt+Down Arrow; in the open
@@ -190,8 +213,10 @@ was installed, and which screen reader is running. Nothing about your VMs, netwo
 Run Hyper-V Manage from the Start menu, or `HyperVManage.exe`, and choose Yes when Windows asks
 for permission.
 
-Focus starts on the first VM in the list. Each one reads as its name, state, address and
-network, for example "Win11-RDP, Running, 10.0.0.41, External Wi-Fi".
+Focus starts on the first VM in the list. Each one reads as its columns, in order, for example
+"Win11-RDP, Running, Address: 10.0.0.41, Network: External Wi-Fi, Memory: 3 GB in use,
+Processors: 4, Starts with PC: Always". View, Columns… changes which columns there are, and
+whether their names are read.
 
 ### Keyboard
 
@@ -237,7 +262,7 @@ Anywhere in the window:
 | Ctrl+Shift+S | Screenshot of the VM's screen |
 
 Every action is also on the VM menu (Alt+V) and in the list's context menu; the checkpoint
-actions are on the Checkpoints menu (Alt+C). The menu bar is
+actions are on the Checkpoints menu (Alt+C), and Columns on the View menu (Alt+W). The menu bar is
 reached with Alt or F10, never with Tab. Help, then Keyboard Shortcuts opens these as a list, one
 shortcut per line and each section's heading a line of its own: arrow through it, and press
 Escape to close it.
