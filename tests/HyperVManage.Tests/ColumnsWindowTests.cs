@@ -179,7 +179,8 @@ public class ColumnsWindowTests
         {
             ((ListBox)single.FindName("ShownList")).SelectedIndex = 0;
             single.RemoveSelected();
-            Assert.Equal("At least one column has to be shown.", single.Spoken[^1]);
+            Assert.Equal("Name always stays first, so it can't be removed.", single.Spoken[^1]);
+            Assert.Single(((ListBox)single.FindName("ShownList")).Items);
         }
         finally { single.Close(); }
     }
