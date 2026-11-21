@@ -201,8 +201,9 @@ function Assert-Room([uint64]$Needed, [string]$What, [string]$Folder, [Nullable[
         # Whole numbers, needed rounded up and free down, so the two never sound the same.
         $neededGB = [Math]::Ceiling($Needed / 1GB)
         $freeGB = [Math]::Floor($Free / 1GB)
-        throw ("{0} needs about {1} GB free for the VM's disk, in {2}, and there's only {3} GB there. Make room, or choose another folder for virtual hard disks in Hyper-V Settings (or with -VhdFolder), and run the script again." -f
-            $What, $neededGB, $Folder, $freeGB)
+        $elsewhere = if ($Location) { 'choose another location (-Location)' } else { 'choose another folder for virtual hard disks in Hyper-V Settings (or with -Location or -VhdFolder)' }
+        throw ("{0} needs about {1} GB free for the VM's disk, in {2}, and there's only {3} GB there. Make room, or {4}, and run the script again." -f
+            $What, $neededGB, $Folder, $freeGB, $elsewhere)
     }
 }
 
@@ -307,10 +308,24 @@ if ($Remove) {
         $vmId = $vm.Id
         $ips = @(Get-VMNetworkAdapter -VM $vm | ForEach-Object { $_.IPAddresses })
         if ($vm.State -ne 'Off') { Say "Turning off $VMName."; Stop-VM -VM $vm -TurnOff -Force }
+        # The disk each drive's chain of checkpoint disks ends in, read before the checkpoints go:
+        # Hyper-V merges them in the background, and for a moment after, the drive can still name
+        # a checkpoint disk that has already gone, which would leave the real disk behind.
+        $bases = @(Get-VMHardDiskDrive -VM $vm | ForEach-Object {
+            $p = [string]$_.Path
+            while ($p) {
+                $parent = (Get-VHD -Path $p -ErrorAction SilentlyContinue).ParentPath
+                if (-not $parent) { break }
+                $p = $parent
+            }
+            $p
+        } | Where-Object { $_ })
         Get-VMSnapshot -VM $vm -ErrorAction SilentlyContinue | Remove-VMSnapshot -IncludeAllChildSnapshots -ErrorAction SilentlyContinue
         $mergeDeadline = (Get-Date).AddMinutes(5)
-        while ((Get-VM -Id $vm.Id).Status -match 'Merging' -and (Get-Date) -lt $mergeDeadline) { Start-Sleep -Seconds 2 }
-        $disks = @(Get-VMHardDiskDrive -VM $vm | Select-Object -ExpandProperty Path)
+        while ((Get-Date) -lt $mergeDeadline -and ((Get-VM -Id $vm.Id).Status -match 'Merging' -or
+               (Get-VMHardDiskDrive -VM $vm | Where-Object { $_.Path -like '*.avhdx' }))) { Start-Sleep -Seconds 2 }
+        $disks = @(@(Get-VMHardDiskDrive -VM $vm | Select-Object -ExpandProperty Path) + $bases |
+            Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Sort-Object -Unique)
     } else {
         $vm = $null
         Say "There is no virtual machine named $VMName. Looking for anything a failed run left behind."
@@ -452,6 +467,10 @@ if ($Location) {
         throw "Can't reach $locationRoot, where the location $Location is. Plug the drive in or connect to the share, or choose another location."
     }
     if ($locationRoot -match '^[A-Za-z]:\\$') {
+        # Hyper-V's own service can't see drive letters mapped for a user; the share's path works.
+        if ([IO.DriveInfo]::new($locationRoot).DriveType -eq 'Network') {
+            throw "$locationRoot is a mapped network drive, which Hyper-V can't use. Pass the share's own path instead, such as \\server\share\Hyper-V."
+        }
         $format = [IO.DriveInfo]::new($locationRoot).DriveFormat
         if ($format -notin 'NTFS', 'ReFS') {
             throw "Hyper-V can only keep a virtual machine on a drive formatted NTFS or ReFS, and $locationRoot is $format. Choose a folder on another drive, or reformat this one as NTFS."
@@ -555,6 +574,16 @@ if ($IsoPath) {
 if (-not $VhdFolder) {
     $VhdFolder = if ($Location) { Join-Path (Join-Path $Location $VMName) 'Virtual Hard Disks' } else { (Get-VMHost).VirtualHardDiskPath }
 }
+# The VM's own folder in its location, if this run makes it: a build that fails before the VM
+# exists removes it again once it's empty, so it doesn't sit there empty on the drive.
+$ownFolder = if ($Location) { Join-Path $Location $VMName } else { $null }
+$madeOwnFolder = [bool]($ownFolder -and -not (Test-Path -LiteralPath $ownFolder))
+function Remove-MadeFolder {
+    if ($madeOwnFolder -and (Test-Path -LiteralPath $ownFolder -PathType Container) -and
+        -not (Get-ChildItem -LiteralPath $ownFolder -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        Remove-Item -LiteralPath $ownFolder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 New-Item -ItemType Directory -Path $VhdFolder -Force | Out-Null
 $vhdPath = Join-Path $VhdFolder "$VMName.vhdx"
 if (Test-Path -LiteralPath $vhdPath) {
@@ -593,6 +622,7 @@ function Add-NetworkSwitch([string[]]$RemoveOnFailure) {
     } catch {
         # Leave nothing that would block a second run: the disks go too.
         foreach ($disk in $RemoveOnFailure) { Remove-Item -LiteralPath $disk -Force -ErrorAction SilentlyContinue }
+        Remove-MadeFolder
         throw "Couldn't create the switch $SwitchName on $($createSwitchOn.Name): $($_.Exception.Message) If this PC has lost its network connection, remove what was made with: Remove-VMSwitch -Name '$SwitchName' -Force. Then run the script again, or add -HostOnly to keep the VM on this PC only."
     }
     # Wait for this PC's own connection to come back, now through the switch.
@@ -616,6 +646,13 @@ function New-BaseVM([switch]$Later) {
     # -Path makes the VM's own folder, named after it, there; its settings go in it.
     $where = if ($Location) { @{ Path = $Location } } else { @{} }
     New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ([int64]$MemoryGB * 1GB) -VHDPath $vhdPath -SwitchName $SwitchName @where | Out-Null
+    if ($Location) {
+        # Checkpoints' saved state and smart paging stay with the VM too, not on the system drive.
+        # (Checkpoint disks always go beside the VM's own disk.) New-VM -Path does this already;
+        # said here so it never depends on that.
+        $own = Join-Path $Location $VMName
+        Set-VM -Name $VMName -SnapshotFileLocation $own -SmartPagingFilePath $own
+    }
     Set-VMProcessor -VMName $VMName -Count $ProcessorCount
     Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes 2GB -StartupBytes ([int64]$MemoryGB * 1GB) -MaximumBytes ([int64][Math]::Max($MemoryGB * 2, 8) * 1GB)
     Set-VM -Name $VMName -AutomaticCheckpointsEnabled $false
@@ -1486,6 +1523,7 @@ sync
         [NewVmSeedDisk]::Write($seedPath, 'CIDATA', $files, 24)
     } catch {
         Remove-Item -LiteralPath $vhdPath, $seedPath -Force -ErrorAction SilentlyContinue
+        Remove-MadeFolder
         throw
     }
 
@@ -2018,6 +2056,7 @@ finally {
     if ($isoMounted) { Dismount-DiskImage -ImagePath $IsoPath -ErrorAction SilentlyContinue | Out-Null }
     if (-not $vhdDone -and (Test-Path -LiteralPath $vhdPath)) {
         Remove-Item -LiteralPath $vhdPath -Force -ErrorAction SilentlyContinue
+        Remove-MadeFolder
     }
 }
 

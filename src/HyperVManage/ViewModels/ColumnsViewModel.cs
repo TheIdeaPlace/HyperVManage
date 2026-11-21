@@ -72,13 +72,19 @@ public sealed partial class ColumnsViewModel : ObservableObject
         return true;
     }
 
+    /// <summary>Moves a column; where it ended up is <see cref="MovedTo"/>, which can differ from the
+    /// target asked for: nothing goes above Name, which always stays first.</summary>
     public bool Move(int index, int target)
     {
+        var id = index >= 0 && index < Shown.Count ? Shown[index].Id : null;
         if (!_editor.Move(index, target)) return false;
-        Shown.Move(index, target);
+        MovedTo = _editor.Shown.ToList().IndexOf(id!);
+        Shown.Move(index, MovedTo);
         UpdatePreview();
         return true;
     }
+
+    public int MovedTo { get; private set; } = -1;
 
     public void Reset()
     {

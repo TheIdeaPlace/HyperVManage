@@ -240,6 +240,15 @@ public sealed class PowerShellHyperVService : IHyperVService
         }
         $size = [uint64]0
         foreach ($s in $files.Values) { $size += $s }
+        # And the VM's own files: its settings, and the memory a saved VM, or a checkpoint taken while
+        # it ran, keeps, about the size of its memory. They're named after the VM's or a checkpoint's id.
+        $ids = @([string]$vm.Id) + @(Get-VMSnapshot -VM $vm -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.Id })
+        $stateFolders = @((Join-Path $vm.ConfigurationLocation 'Virtual Machines'), (Join-Path $vm.SnapshotFileLocation 'Snapshots')) | Select-Object -Unique
+        foreach ($folder in $stateFolders) {
+            Get-ChildItem -LiteralPath $folder -Recurse -File -Force -ErrorAction SilentlyContinue |
+                Where-Object { $name = $_.FullName; $ids | Where-Object { $name -like "*$_*" } } |
+                ForEach-Object { $size += [uint64]$_.Length }
+        }
         {{NewVmScript.FreeSpaceFunction()}}
         $free = Get-FreeSpace $exportParent
         # The export and the copy made from it, both there until the export is deleted.
@@ -314,6 +323,11 @@ public sealed class PowerShellHyperVService : IHyperVService
     /// the first 15 characters). The folders Clone makes, named after the VM under Hyper-V's VM and
     /// disk folders, go too once nothing is left in them, but only when this VM's configuration or
     /// one of its disks was in them, so an unrelated folder that happens to share the name stays.
+    /// So does the VM's own folder, the one Hyper-V keeps it in, when that is named after the VM
+    /// and isn't one of Hyper-V's own folders: a VM given a location by New VM or Clone, or one made
+    /// in Hyper-V Manager with "Store the virtual machine in a different location". Checkpoint disks
+    /// are merged first, and the disk each drive ends in is read before then, since for a moment
+    /// after the merge a drive can still name a checkpoint disk that has gone.
     /// </summary>
     internal static string BuildDeleteScript(string vmId) => GetVm(vmId) + "$VMName = $vm.Name\n" + NewVmScript.ComputerNameRule() + """
 
@@ -321,10 +335,24 @@ public sealed class PowerShellHyperVService : IHyperVService
         $names = @($ComputerName, $LegacyComputerName) | Select-Object -Unique
         $ips = @(Get-VMNetworkAdapter -VM $vm | ForEach-Object { $_.IPAddresses })
         if ($vm.State -ne 'Off') { Stop-VM -VM $vm -TurnOff -Force }
+        # The disk each drive's chain of checkpoint disks ends in, read before the checkpoints go:
+        # Hyper-V merges them in the background, and for a moment after, the drive can still name a
+        # checkpoint disk that has already gone, which would leave the real disk behind.
+        $bases = @(Get-VMHardDiskDrive -VM $vm | ForEach-Object {
+            $p = [string]$_.Path
+            while ($p) {
+                $parent = (Get-VHD -Path $p -ErrorAction SilentlyContinue).ParentPath
+                if (-not $parent) { break }
+                $p = $parent
+            }
+            $p
+        } | Where-Object { $_ })
         Get-VMSnapshot -VM $vm -ErrorAction SilentlyContinue | Remove-VMSnapshot -IncludeAllChildSnapshots -ErrorAction SilentlyContinue
         $deadline = (Get-Date).AddMinutes(5)
-        while ((Get-VM -Id $vm.Id).Status -match 'Merging' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
-        $disks = @(Get-VMHardDiskDrive -VM $vm | Select-Object -ExpandProperty Path)
+        while ((Get-Date) -lt $deadline -and ((Get-VM -Id $vm.Id).Status -match 'Merging' -or
+               (Get-VMHardDiskDrive -VM $vm | Where-Object { $_.Path -like '*.avhdx' }))) { Start-Sleep -Seconds 2 }
+        $disks = @(@(Get-VMHardDiskDrive -VM $vm | Select-Object -ExpandProperty Path) + $bases |
+            Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Sort-Object -Unique)
         $inUse = @{}
         foreach ($other in @(Get-VM | Where-Object { $_.Id -ne $vm.Id })) {
             foreach ($path in @(Get-VMHardDiskDrive -VM $other | Select-Object -ExpandProperty Path)) {

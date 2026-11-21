@@ -111,6 +111,34 @@ public class ColumnRuleTests
     }
 
     [Fact]
+    public void APinnedColumn_StaysFirst_AndNothingGoesAboveIt()
+    {
+        var set = Set with { Pinned = "title" };
+        // A saved layout without it, or with it lower, gets it back first.
+        Assert.Equal(["title", "author", "state"], set.Reconcile(["author", "state"]));
+        Assert.Equal(["title", "author"], set.Reconcile(["author", "title"]));
+
+        var e = new ColumnLayoutEditor(set, ["title", "state", "author"]);
+        Assert.False(e.Remove(0));
+        Assert.Equal("Title always stays first, so it can't be removed.", e.Said);
+        Assert.False(e.Move(0, 1));
+        Assert.Equal("Title always stays first.", e.Said);
+        Assert.False(e.Move(1, 0));
+        Assert.Equal("State is already at the top, under Title.", e.Said);
+        // Move to Top goes to just below it.
+        Assert.True(e.Move(2, 0));
+        Assert.Equal("Author moved to the top, under Title.", e.Said);
+        Assert.Equal(["title", "author", "state"], e.Shown);
+        Assert.True(e.Move(1, 2));
+        Assert.Equal("Author moved to the bottom.", e.Said);
+
+        var two = new ColumnLayoutEditor(set, ["title", "state"]);
+        Assert.False(two.Move(1, 0));
+        Assert.Equal("State is the only column that can move.", two.Said);
+        Assert.Equal("name", VmColumns.Set.Pinned);
+    }
+
+    [Fact]
     public void TheColumnsDialogsModel_KeepsBothListsInStep_AndThePreviewIsTheRow()
     {
         var vm = new VmInfo("1") { Name = "Lab", State = "Off", Location = @"D:\Hyper-V\Lab" };
@@ -127,7 +155,8 @@ public class ColumnRuleTests
         var moved = editor.Shown[2];
         Assert.True(editor.Move(2, 1));
         Assert.Same(moved, editor.Shown[1]);
-        Assert.Equal("Location moved above State.", editor.Said);
+        Assert.Equal(1, editor.MovedTo);
+        Assert.Equal("Location moved to the top, under Name.", editor.Said);
 
         editor.SpeakNames = false;
         Assert.Equal(@"Lab, D:\Hyper-V\Lab, Off", editor.Preview);
@@ -185,7 +214,8 @@ public class SettingsStoreTests
         var store = new InMemorySettingsStore();
         store.Save(new SettingsData { VmListColumns = ["state", "retired-column", "name"] });
         var vm = new MainViewModel(new DemoHyperVService(), settings: store);
-        Assert.Equal(["state", "name"], vm.RowFormat.Columns.Select(c => c.Id));
+        // Name goes back first: it's the row's name and what type-ahead goes by.
+        Assert.Equal(["name", "state"], vm.RowFormat.Columns.Select(c => c.Id));
         // Never chosen: names are spoken.
         Assert.True(vm.RowFormat.SpeakNames);
     }
@@ -207,9 +237,19 @@ public class LocationTests
     [InlineData(@"D:\VMs?", "can't contain")]
     public void LocationProblem_SaysWhyAFolderCantHoldAVm(string location, string? problem)
     {
-        var said = NewVmScript.LocationProblem(location, Ntfs);
+        var said = NewVmScript.LocationProblem(location, Ntfs, _ => false);
         if (problem is null) Assert.Null(said);
         else Assert.Contains(problem, said);
+    }
+
+    [Fact]
+    public void AMappedNetworkDrive_IsRefused_BeforeTheDriveIsTouched()
+    {
+        var touched = false;
+        var said = NewVmScript.LocationProblem(@"Z:\VMs", _ => { touched = true; return "NTFS"; }, root => root == @"Z:\");
+        Assert.Contains(@"Z:\ is a mapped network drive", said);
+        Assert.Contains(@"\\server\share", said);
+        Assert.False(touched);
     }
 
     [Theory]
@@ -234,7 +274,7 @@ public class LocationTests
         string? chosen = null;
         var n = new NewVmViewModel([], new InMemoryIsoHistory(), ubuntu: true, location: @"E:\VMs")
         {
-            CheckLocation = l => NewVmScript.LocationProblem(l, Ntfs),
+            CheckLocation = l => NewVmScript.LocationProblem(l, Ntfs, _ => false),
             LocationChosen = l => chosen = l,
         };
         n.Password = "pw";
@@ -348,6 +388,64 @@ public class LocationTests
         var delete = PowerShellHyperVService.BuildDeleteScript("id");
         Assert.Contains("(Split-Path -Leaf $own.TrimEnd('\\')) -eq $name", delete);
         Assert.Contains("$vmHost.VirtualMachinePath, $vmHost.VirtualHardDiskPath", delete);
+    }
+
+    /// <summary>Delete's own-folder rule, run in Windows PowerShell 5.1 with Hyper-V's cmdlets stood
+    /// in for and real folders: a VM's folder named after it goes once it's empty; Hyper-V's own
+    /// folder, a folder named something else, and one with a file in it, never do.</summary>
+    [Theory]
+    [InlineData("own-empty", true)]
+    [InlineData("other-name", false)]
+    [InlineData("host-folder", false)]
+    [InlineData("file-inside", false)]
+    public async Task Delete_RemovesOnlyAnEmptyFolderOfTheVmsOwn(string kind, bool removed)
+    {
+        var root = Directory.CreateTempSubdirectory("hvm-delete-").FullName;
+        try
+        {
+            var name = "Lab" + Guid.NewGuid().ToString("N")[..6];
+            var hostVms = Directory.CreateDirectory(Path.Combine(root, "HostVMs")).FullName;
+            var hostDisks = Directory.CreateDirectory(Path.Combine(root, "HostDisks")).FullName;
+            string vmPath, hostVmPath = hostVms;
+            switch (kind)
+            {
+                case "other-name":
+                    vmPath = Directory.CreateDirectory(Path.Combine(root, "Something", "Virtual Machines")).Parent!.FullName;
+                    break;
+                case "host-folder":
+                    // Hyper-V's own VM folder, which happens to be named like the VM; given back with
+                    // a trailing backslash and in other case, as a setting might be.
+                    vmPath = Directory.CreateDirectory(Path.Combine(root, name)).FullName;
+                    hostVmPath = vmPath.ToUpperInvariant() + "\\";
+                    break;
+                default:
+                    vmPath = Directory.CreateDirectory(Path.Combine(root, name, "Virtual Machines")).Parent!.FullName;
+                    Directory.CreateDirectory(Path.Combine(vmPath, "Snapshots"));
+                    if (kind == "file-inside")
+                        File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(vmPath, "Virtual Hard Disks", "deep")).FullName, "keep.txt"), "x");
+                    break;
+            }
+            var stubs = $$"""
+                $global:theVm = [pscustomobject]@{ Id = 'id-1'; Name = {{Ps.Quote(name)}}; State = 'Off'; Status = ''; Path = {{Ps.Quote(vmPath)}}; ConfigurationLocation = {{Ps.Quote(vmPath)}} }
+                function Get-VM { param($Id) $global:theVm }
+                function Get-VMNetworkAdapter { param($VM) }
+                function Get-VMSnapshot { param($VM, $ErrorAction) }
+                function Remove-VMSnapshot { param([Parameter(ValueFromPipeline = $true)]$VMSnapshot, [switch]$IncludeAllChildSnapshots, $ErrorAction) }
+                function Get-VMHardDiskDrive { param($VM) }
+                function Get-VHD { param($Path, $ErrorAction) }
+                function Get-VMHost { [pscustomobject]@{ VirtualMachinePath = {{Ps.Quote(hostVmPath)}}; VirtualHardDiskPath = {{Ps.Quote(hostDisks)}} } }
+                function Remove-VM { param($VM, [switch]$Force) }
+
+                """;
+            var json = await UbuntuBuildTests.RunPsForTests(stubs + PowerShellHyperVService.BuildDeleteScript("id-1"));
+            var result = PowerShellHyperVService.ParseDeleteResult(json.Trim().Split('\n')[^1]);
+            Assert.Empty(result.Failed);
+            Assert.Equal(!removed, Directory.Exists(vmPath));
+            Assert.Equal(removed, result.Deleted.Contains(vmPath));
+            // Hyper-V's own folders are never touched.
+            Assert.True(Directory.Exists(hostVms) && Directory.Exists(hostDisks));
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     [Fact]

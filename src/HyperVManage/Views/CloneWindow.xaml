@@ -10,11 +10,16 @@
         <!-- Empty means Hyper-V's default folders. The sentence under it says where the copy goes,
              and is the box's description so it's heard there too. -->
         <Label Content="Loca_tion:" Target="{Binding ElementName=LocationBox}" Padding="0,10,0,4"/>
-        <DockPanel>
-            <Button Content="Choose _Folder…" DockPanel.Dock="Right" Margin="6,0,0,0" Padding="8,0" Click="ChooseFolder_Click"
-                    AutomationProperties.HelpText="Choose the folder to keep the copy in."/>
+        <!-- The box first, so Tab reaches it before its button. -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
             <TextBox x:Name="LocationBox" AutomationProperties.Name="Location" TextChanged="Inputs_Changed"/>
-        </DockPanel>
+            <Button Grid.Column="1" Content="Choose _Folder…" Margin="6,0,0,0" Padding="8,0" Click="ChooseFolder_Click"
+                    AutomationProperties.HelpText="Choose the folder to keep the copy in."/>
+        </Grid>
         <TextBlock x:Name="WhereText" TextWrapping="Wrap" Margin="0,4,0,0"/>
 
         <TextBlock x:Name="NoteText" TextWrapping="Wrap" Margin="0,10,0,0"/>

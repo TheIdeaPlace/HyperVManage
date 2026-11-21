@@ -130,7 +130,8 @@ public static class NewVmScript
     /// </summary>
     /// <param name="driveFormat">The file system of a drive letter's root, or null if it isn't
     /// there; for tests.</param>
-    public static string? LocationProblem(string location, Func<string, string?>? driveFormat = null)
+    /// <param name="isMappedDrive">Whether a drive letter is a mapped network drive; for tests.</param>
+    public static string? LocationProblem(string location, Func<string, string?>? driveFormat = null, Func<string, bool>? isMappedDrive = null)
     {
         if (location.Length == 0) return null;
         var isShare = location.StartsWith(@"\\", StringComparison.Ordinal);
@@ -142,12 +143,23 @@ public static class NewVmScript
         if (location.IndexOfAny(Path.GetInvalidPathChars()) >= 0 || location.IndexOfAny(['*', '?', '"', '<', '>', '|'], 2) >= 0)
             return "The location can't contain any of these: * ? \" < > |";
         var root = char.ToUpperInvariant(location[0]) + @":\";
+        // Asked before anything touches the drive: a disconnected network drive would hold up the
+        // window. Hyper-V's own service can't see drive letters mapped for a user, so the build would
+        // fail; the share's own path works.
+        if ((isMappedDrive ?? IsMappedDrive)(root))
+            return $@"{root} is a mapped network drive, which Hyper-V can't use. Type the share's own path instead, such as \\server\share\Hyper-V.";
         var format = (driveFormat ?? DriveFormat)(root);
         if (format is null) return $"There's no drive {root} on this PC just now. Plug it in, or choose another location.";
         if (!format.Equals("NTFS", StringComparison.OrdinalIgnoreCase) && !format.Equals("ReFS", StringComparison.OrdinalIgnoreCase))
             return $"Hyper-V can only keep a virtual machine on a drive formatted NTFS or ReFS, and {root} is {format}. Choose a folder on another drive, or reformat this one as NTFS.";
         if (File.Exists(location.TrimEnd('\\'))) return $"{location} is a file, not a folder. Choose a folder for the location.";
         return null;
+    }
+
+    private static bool IsMappedDrive(string root)
+    {
+        try { return new DriveInfo(root).DriveType == DriveType.Network; }
+        catch (Exception) { return false; }
     }
 
     private static string? DriveFormat(string root)

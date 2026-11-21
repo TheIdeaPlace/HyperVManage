@@ -54,14 +54,16 @@ public class ColumnsWindowTests
             var grid = (GridView)list.View;
             Assert.Equal(["Name", "State", "Address", "Network", "Memory", "Processors", "Starts with PC"], grid.Columns.Select(c => (string)c.Header));
 
+            // Name is kept first, whatever is asked for.
             vm.ApplyColumns(["location", "name", "state"], speakNames: true);
             Pump();
-            Assert.Equal(["Location", "Name", "State"], grid.Columns.Select(c => (string)c.Header));
+            Assert.Equal(["Name", "Location", "State"], grid.Columns.Select(c => (string)c.Header));
+            Assert.False(grid.AllowsColumnReorder);
             // Type-ahead goes by what's read first.
-            Assert.Equal(nameof(VmInfo.Location), TextSearch.GetTextPath(list));
+            Assert.Equal(nameof(VmInfo.Name), TextSearch.GetTextPath(list));
             var names = RowNames(list);
             Assert.Equal(vm.Vms.Select(v => v.AccessibleName), names);
-            Assert.Contains(@"D:\Hyper-V\Build Agent, Name: Build Agent, Saved", names);
+            Assert.Contains(@"Build Agent, Location: D:\Hyper-V\Build Agent, Saved", names);
 
             // The cells show what the row's name says, column by column.
             var agent = vm.Vms.Single(v => v.Name == "Build Agent");
@@ -128,13 +130,21 @@ public class ColumnsWindowTests
 
             shown.SelectedIndex = 2;
             window.MoveSelected(i => i - 1);
-            Assert.Equal("Location moved above State.", window.Spoken[^1]);
+            Assert.Equal("Location moved to the top, under Name.", window.Spoken[^1]);
             Assert.Equal(1, shown.SelectedIndex);
             Assert.Equal("location", ((ColumnItem)shown.SelectedItem).Id);
 
             shown.SelectedIndex = 0;
             window.MoveSelected(i => i - 1);
-            Assert.Equal("Name is already at the top.", window.Spoken[^1]);
+            Assert.Equal("Name always stays first.", window.Spoken[^1]);
+
+            // Move to Top lands just below Name, and focus follows the column there.
+            shown.SelectedIndex = 2;
+            window.MoveSelected(_ => 0);
+            Assert.Equal("State moved to the top, under Name.", window.Spoken[^1]);
+            Assert.Equal(1, shown.SelectedIndex);
+            window.MoveSelected(i => i + 1);
+            Assert.Equal("State moved to the bottom.", window.Spoken[^1]);
 
             shown.SelectedIndex = 2;
             window.RemoveSelected();

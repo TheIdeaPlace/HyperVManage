@@ -55,11 +55,9 @@ public partial class CloneWindow : Window
 
     private void ChooseFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (PickFolder(LocationBox.Text) is { } folder)
-        {
-            LocationBox.Text = folder;
-            Announcer.Announce(this, WhereText.Text);
-        }
+        if (PickFolder(LocationBox.Text) is { } folder) LocationBox.Text = folder;
+        // Focus goes to the box, which then reads the folder and, as its description, where the copy
+        // will go; announcing that as well would say it twice.
         LocationBox.Focus();
     }
 

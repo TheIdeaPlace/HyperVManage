@@ -14,8 +14,10 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
 - Lists every VM with its state, address, network, memory, processors and whether it starts
   with the PC. The list refreshes itself every ten seconds without moving your place in it.
 - **View, Columns…** (Alt+W, C) chooses the list's columns and their order: those above, and
-  **Location** (the folder the VM is kept in), **Disks** (its virtual hard disk files) and
-  **Checkpoints**. Each row is read as its columns, in the order they're shown, so what you hear
+  **Location** (the folder the VM is kept in), **Disks** (its virtual hard disk files),
+  **Checkpoints** and **Memory in use** (Memory itself is what the VM starts with, which doesn't
+  move, so the row isn't read again every time dynamic memory changes). Name always stays first:
+  it's the row's name, and typing a letter in the list jumps by it. Each row is read as its columns, in the order they're shown, so what you hear
   is what's on screen. With **Speak column names** on, as it is to begin with, each column but
   the first is read with its name ("Network: External Wi-Fi"); state and checkpoint counts never
   are, since they already say what they are. In the dialog, Enter in Available adds a column;
@@ -95,11 +97,14 @@ It isn't called Hyper-V Manager because Windows already has a Hyper-V Manager.
   box, with Choose Folder (Alt+F) beside it, for keeping the VM somewhere other than Hyper-V's
   own folders on the system drive: a folder on an external SSD, say. The VM gets a folder of its
   own there, named after it, with its settings inside and its disks in that folder's Virtual Hard
-  Disks, as Hyper-V Manager lays out a VM you tell it where to keep. The sentence under the box,
+  Disks, as Hyper-V Manager lays out a VM you tell it where to keep. Its checkpoints stay there
+  too: their saved state in the VM's folder, their disks beside the VM's disk. The sentence under the box,
   also read as its description, says where the VM will go. Leave it empty for Hyper-V's default
   folders. The location you used last is offered next time, unless its drive isn't there. Hyper-V
   can only keep a VM on a drive formatted NTFS or ReFS, so a drive formatted exFAT, as many
-  external drives come, is refused before anything is built, with a note saying so. Shut down or
+  external drives come, is refused before anything is built, with a note saying so. So is a
+  mapped network drive letter, which Hyper-V's own service can't see; type the share's path
+  (`\\server\share\folder`) instead. Shut down or
   save a VM before unplugging the drive it's on. The Location column shows where each VM is.
 - **ISOs used before**: New Windows Virtual Machine's Windows ISO is a list of the ISOs you've built VMs
   from, the most recent first and already chosen, then the newest Windows ISO in your Downloads
@@ -214,9 +219,9 @@ Run Hyper-V Manage from the Start menu, or `HyperVManage.exe`, and choose Yes wh
 for permission.
 
 Focus starts on the first VM in the list. Each one reads as its columns, in order, for example
-"Win11-RDP, Running, Address: 10.0.0.41, Network: External Wi-Fi, Memory: 3 GB in use,
+"Win11-RDP, Running, Address: 10.0.0.41, Network: External Wi-Fi, Memory: 4 GB,
 Processors: 4, Starts with PC: Always". View, Columns… changes which columns there are, and
-whether their names are read.
+whether their names are read. Name is always first.
 
 ### Keyboard
 

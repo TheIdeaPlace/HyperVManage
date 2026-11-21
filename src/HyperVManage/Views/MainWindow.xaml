@@ -134,7 +134,8 @@
                 <ListView.View>
                     <!-- The columns come from View, Columns… and are made in code, in the order the
                          row's name is read (MainWindow.BuildColumns). -->
-                    <GridView x:Name="VmGrid"/>
+                    <!-- No dragging headers: that would reorder the screen but not what's read. -->
+                    <GridView x:Name="VmGrid" AllowsColumnReorder="False"/>
                 </ListView.View>
             </ListView>
 

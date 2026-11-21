@@ -12,13 +12,15 @@ public static class VmColumns
         new("address", "Address", nameof(VmInfo.AddressText), Width: 120),
         new("network", "Network", nameof(VmInfo.SwitchName), Width: 140),
         new("memory", "Memory", nameof(VmInfo.MemoryText), Width: 100),
+        new("memoryInUse", "Memory in use", nameof(VmInfo.MemoryInUseText), Width: 120, SpokenLabel: "In use"),
         new("processors", "Processors", nameof(VmInfo.ProcessorsText), Width: 80),
         new("startsWithPc", "Starts with PC", nameof(VmInfo.StartsWithPcText), Width: 140),
         new("location", "Location", nameof(VmInfo.Location), Width: 280),
         new("disks", "Disks", nameof(VmInfo.DisksText), Width: 360),
         new("checkpoints", "Checkpoints", nameof(VmInfo.CheckpointsText), ColumnKind.Count, 120),
     ],
-    ["name", "state", "address", "network", "memory", "processors", "startsWithPc"]);
+    ["name", "state", "address", "network", "memory", "processors", "startsWithPc"],
+    Pinned: "name");
 
     /// <summary>What a column shows for a VM: the same text on screen and in the row's name.</summary>
     public static string Value(VmInfo vm, string id) => id switch
@@ -28,6 +30,7 @@ public static class VmColumns
         "address" => vm.AddressText,
         "network" => vm.SwitchName,
         "memory" => vm.MemoryText,
+        "memoryInUse" => vm.MemoryInUseText,
         "processors" => vm.ProcessorsText,
         "startsWithPc" => vm.StartsWithPcText,
         "location" => vm.Location,

@@ -58,10 +58,15 @@ public sealed class SettingsStore(string? file = null) : ISettingsStore
         }
         catch (Exception)
         {
-            // Can't be opened just now (locked, no access): leave it alone and use the defaults.
+            // Can't be opened just now (locked by antivirus or a sync, no access): use the defaults
+            // for this run, and leave the file alone, never saving over it.
+            _couldNotRead = true;
             return new SettingsData();
         }
     }
+
+    /// <summary>Set when the file was there but couldn't be opened: this run mustn't save over it.</summary>
+    private bool _couldNotRead;
 
     private void SetAside()
     {
@@ -71,6 +76,7 @@ public sealed class SettingsStore(string? file = null) : ISettingsStore
 
     public bool Save(SettingsData data)
     {
+        if (_couldNotRead) return false;
         string? temp = null;
         try
         {

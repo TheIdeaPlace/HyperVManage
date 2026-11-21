@@ -86,7 +86,7 @@ public partial class ColumnsWindow : Window
         var ok = _vm.Move(index, to);
         Say(_vm.Said);
         // Focus stays on the column that moved.
-        if (ok) FocusShown(to);
+        if (ok) FocusShown(_vm.MovedTo);
     }
 
     private int Last => _vm.Shown.Count - 1;

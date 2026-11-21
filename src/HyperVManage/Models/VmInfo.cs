@@ -19,7 +19,7 @@ public sealed partial class VmInfo : ObservableObject
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(StateText))] private string _state = "Off";
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(ProcessorsText))] private int _processorCount;
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(MemoryText))] private long _memoryStartupMB;
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(MemoryText))] private long _memoryAssignedMB;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(MemoryInUseText))] private long _memoryAssignedMB;
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(MemoryText))] private bool _dynamicMemory;
     [ObservableProperty] private long _uptimeSeconds;
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(AccessibleName), nameof(StartsWithPcText))] private string _automaticStartAction = "";
@@ -54,10 +54,13 @@ public sealed partial class VmInfo : ObservableObject
 
     public string AddressText => IpAddresses.Length > 0 ? string.Join(", ", IpAddresses) : "";
 
-    public string MemoryText =>
-        MemoryAssignedMB > 0 ? $"{FormatMB(MemoryAssignedMB)} in use"
-        : MemoryStartupMB > 0 ? FormatMB(MemoryStartupMB)
-        : "";
+    /// <summary>The memory the VM starts with: steady, so it can be in the row's name without the
+    /// focused row being read again as dynamic memory moves.</summary>
+    public string MemoryText => MemoryStartupMB > 0 ? FormatMB(MemoryStartupMB) : "";
+
+    /// <summary>What a running VM is using now. It moves every few seconds with dynamic memory, so
+    /// it's a column of its own, off to begin with.</summary>
+    public string MemoryInUseText => MemoryAssignedMB > 0 ? $"{FormatMB(MemoryAssignedMB)} in use" : "";
 
     public string StartsWithPcText => AutomaticStartAction switch
     {

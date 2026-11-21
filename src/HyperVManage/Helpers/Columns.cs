@@ -19,7 +19,10 @@ public sealed record ColumnDef(string Id, string Heading, string Property, Colum
 }
 
 /// <summary>The columns one kind of list can show, and those it shows at first.</summary>
-public sealed record ColumnSet(string Id, IReadOnlyList<ColumnDef> Columns, IReadOnlyList<string> Defaults)
+/// <param name="Pinned">A column that is always shown and always first, such as a name: it is the
+/// row's name, read first, and typing a letter in the list jumps by it, so a state or a count must
+/// never take its place. Null for none.</param>
+public sealed record ColumnSet(string Id, IReadOnlyList<ColumnDef> Columns, IReadOnlyList<string> Defaults, string? Pinned = null)
 {
     public IEnumerable<string> Ids => Columns.Select(c => c.Id);
 
@@ -40,7 +43,13 @@ public sealed record ColumnSet(string Id, IReadOnlyList<ColumnDef> Columns, IRea
         var result = new List<string>();
         foreach (var id in saved ?? [])
             if (id is not null && known.Contains(id) && !result.Contains(id)) result.Add(id);
-        return result.Count > 0 ? result : Defaults.ToList();
+        if (result.Count == 0) result.AddRange(Defaults);
+        if (Pinned is not null && known.Contains(Pinned))
+        {
+            result.Remove(Pinned);
+            result.Insert(0, Pinned);
+        }
+        return result;
     }
 }
 
@@ -97,6 +106,10 @@ public sealed class ColumnLayoutEditor
 
     private string Name(string id) => Set.Column(id).Heading;
 
+    private bool HasPinned => Set.Pinned is not null && _shown.Count > 0 && _shown[0] == Set.Pinned;
+
+    private bool IsPinned(int index) => index == 0 && HasPinned;
+
     /// <summary>Shows an available column, at the end.</summary>
     public bool Add(int availableIndex)
     {
@@ -115,6 +128,7 @@ public sealed class ColumnLayoutEditor
     public bool Remove(int index)
     {
         if (index < 0 || index >= _shown.Count) { Said = "No column is selected."; return false; }
+        if (IsPinned(index)) { Said = $"{Name(_shown[index])} always stays first, so it can't be removed."; return false; }
         if (_shown.Count == 1) { Said = "At least one column has to be shown."; return false; }
         var name = Name(_shown[index]);
         _shown.RemoveAt(index);
@@ -127,10 +141,14 @@ public sealed class ColumnLayoutEditor
         var last = _shown.Count - 1;
         if (index < 0 || index > last) { Said = "No column is selected."; return false; }
         var name = Name(_shown[index]);
-        if (target < 0 || target > last || target == index)
+        if (IsPinned(index)) { Said = $"{name} always stays first."; return false; }
+        // Nothing goes above a pinned column: the top is just below it.
+        var top = HasPinned ? 1 : 0;
+        if (target < top && target < index && index > top) target = top;
+        if (target < top || target > last || target == index)
         {
-            Said = last == 0 ? $"{name} is the only column shown."
-                : target <= index && index == 0 ? $"{name} is already at the top."
+            Said = last == top ? (top == 0 ? $"{name} is the only column shown." : $"{name} is the only column that can move.")
+                : target <= index && index == top ? (top == 0 ? $"{name} is already at the top." : $"{name} is already at the top, under {Name(_shown[0])}.")
                 : target >= index && index == last ? $"{name} is already at the bottom."
                 : $"{name} didn't move.";
             return false;
@@ -138,7 +156,7 @@ public sealed class ColumnLayoutEditor
         var id = _shown[index];
         _shown.RemoveAt(index);
         _shown.Insert(target, id);
-        Said = target == 0 ? $"{name} moved to the top."
+        Said = target == top ? (top == 0 ? $"{name} moved to the top." : $"{name} moved to the top, under {Name(_shown[0])}.")
             : target == last ? $"{name} moved to the bottom."
             : target < index ? $"{name} moved above {Name(_shown[target + 1])}."
             : $"{name} moved below {Name(_shown[target - 1])}.";

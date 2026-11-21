@@ -58,6 +58,8 @@ public class LiveLocationTests
             New-VHD -Path $vhdPath -SizeBytes 1GB -Dynamic | Out-Null
             $where = @{ Path = $Location }
             New-VM -Name $VMName -Generation 2 -MemoryStartupBytes 1GB -VHDPath $vhdPath @where | Out-Null
+            $own = Join-Path $Location $VMName
+            Set-VM -Name $VMName -SnapshotFileLocation $own -SmartPagingFilePath $own
             Set-VM -Name $VMName -AutomaticStartAction Nothing
             """, Ct);
         try
@@ -66,6 +68,24 @@ public class LiveLocationTests
             Assert.Equal(own, listed.GetProperty("Location").GetString());
             Assert.Equal([Path.Combine(own, "Virtual Hard Disks", name + ".vhdx")],
                 listed.GetProperty("DiskPaths").EnumerateArray().Select(e => e.GetString()));
+
+            // A checkpoint keeps everything in the location too: its settings in the VM's folder,
+            // its disk beside the VM's disk. Nothing on the system drive.
+            var where = await PowerShellRunner.RunAsync($$"""
+                $vm = Get-VM | Where-Object Name -eq {{Ps.Quote(name)}}
+                Checkpoint-VM -VM $vm -SnapshotName 'live-test'
+                $vm = Get-VM -Id $vm.Id
+                $vm.SnapshotFileLocation
+                $vm.SmartPagingFilePath
+                Get-VMHardDiskDrive -VM $vm | ForEach-Object { $_.Path }
+                Get-ChildItem -LiteralPath (Join-Path $vm.SnapshotFileLocation 'Snapshots') -Recurse -File | ForEach-Object { $_.FullName }
+                """, Ct);
+            var lines = where.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Equal(own, lines[0]);
+            Assert.Equal(own, lines[1]);
+            Assert.EndsWith(".avhdx", lines[2]);
+            Assert.All(lines, l => Assert.StartsWith(own + "\\", l + "\\"));
+            Assert.True(lines.Length > 3, "The checkpoint's own files weren't in the VM's Snapshots folder:\n" + where);
         }
         finally
         {

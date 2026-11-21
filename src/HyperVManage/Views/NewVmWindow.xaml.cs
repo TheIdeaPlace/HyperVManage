@@ -273,12 +273,9 @@ public partial class NewVmWindow : Window
 
     private void ChooseFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (PickFolder(_vm.Location) is { } folder)
-        {
-            _vm.Location = folder;
-            // Said, since focus comes back to the button and the box's new text isn't read there.
-            Announcer.Announce(this, _vm.LocationDescription);
-        }
+        if (PickFolder(_vm.Location) is { } folder) _vm.Location = folder;
+        // Focus goes to the box, which then reads the folder and, as its description, where the VM
+        // will go; announcing that as well would say it twice.
         LocationBox.Focus();
     }
 
