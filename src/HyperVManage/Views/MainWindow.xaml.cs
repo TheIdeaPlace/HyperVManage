@@ -55,7 +55,9 @@ public partial class MainWindow : Window
         if (demo) Title = "Hyper-V Manage (demo, pretend VMs)";
 
         vm.Announce += text => Announcer.Announce(this, text);
-        vm.RequestCloneName = AskCloneName;
+        vm.RequestClone = (v, location) => CloneWindow.Ask(this, v, location);
+        BuildColumns();
+        vm.ColumnsChanged += BuildColumns;
         vm.RequestCheckpointName = AskCheckpointName;
         vm.RequestCheckpointToApply = (v, checkpoints, chosen) => ApplyCheckpointWindow.Ask(this, v, checkpoints, chosen);
         vm.RequestCheckpointRename = AskCheckpointRename;
@@ -99,6 +101,8 @@ public partial class MainWindow : Window
         };
         Closed += (_, _) =>
         {
+            // Widths dragged this session are saved as the app closes.
+            vm.RememberColumnWidths(CurrentWidths(), saveNow: true);
             // They have no owner, so they don't go with this window by themselves.
             foreach (var viewer in _screenshots.Values.ToList()) viewer.Close();
             _newVmWindow?.Close();
@@ -253,12 +257,46 @@ public partial class MainWindow : Window
         if (_vm.ConnectCommand.CanExecute(null)) _vm.ConnectCommand.Execute(null);
     }
 
-    private string? AskCloneName(VmInfo vm) =>
-        PromptWindow.Ask(this, $"Clone {vm.Name}",
-            "Name for the copy:",
-            $"{vm.Name}-copy",
-            "The copy has its own disk, so this takes a few minutes and needs as much free space as the VM uses. " +
-            "Windows inside it keeps the same computer name: rename it there before running both on your network.");
+    // ── Columns ──────────────────────────────────────────────────────────────
+
+    /// <summary>Which column each of the list's columns is, for saving widths.</summary>
+    private readonly Dictionary<GridViewColumn, string> _columnIds = [];
+
+    private Dictionary<string, double> CurrentWidths() =>
+        _columnIds.Where(c => double.IsFinite(c.Key.ActualWidth) && c.Key.ActualWidth > 0)
+                  .ToDictionary(c => c.Value, c => c.Key.ActualWidth);
+
+    /// <summary>
+    /// Makes the list's columns from View, Columns…, in the order the row's name is read, at the
+    /// widths last dragged to. Type-ahead goes by the first column, which is what's read first.
+    /// </summary>
+    internal void BuildColumns()
+    {
+        if (_columnIds.Count > 0) _vm.RememberColumnWidths(CurrentWidths());
+        VmGrid.Columns.Clear();
+        _columnIds.Clear();
+        foreach (var c in _vm.RowFormat.Columns)
+        {
+            var column = new GridViewColumn
+            {
+                Header = c.Heading,
+                Width = _vm.ColumnWidths.TryGetValue(c.Id, out var width) ? width : c.Width,
+                DisplayMemberBinding = new System.Windows.Data.Binding(c.Property),
+            };
+            _columnIds[column] = c.Id;
+            VmGrid.Columns.Add(column);
+        }
+        TextSearch.SetTextPath(VmList, _vm.RowFormat.Columns.FirstOrDefault()?.Property ?? nameof(VmInfo.Name));
+    }
+
+    private void Columns_Click(object sender, RoutedEventArgs e)
+    {
+        var sample = _vm.Selected ?? _vm.Vms.FirstOrDefault();
+        var editor = new ColumnsViewModel(VmColumns.Set, _vm.RowFormat.Columns.Select(c => c.Id), _vm.RowFormat.SpeakNames,
+            (columns, speak) => sample is null ? "There's no virtual machine to show." : new VmRowFormat(columns, speak).Compose(sample));
+        if (ColumnsWindow.Ask(this, editor)) _vm.ApplyColumns(editor.ShownIds, editor.SpeakNames);
+        FocusSelectedRow();
+    }
 
     private string? AskCheckpointName(VmInfo vm) =>
         PromptWindow.Ask(this, $"Checkpoint {vm.Name}",
@@ -311,7 +349,10 @@ public partial class MainWindow : Window
             Announcer.Announce(_newVmWindow, $"{_newVmWindow.Title} is already open. One virtual machine is built at a time.");
             return;
         }
-        var newVm = new NewVmViewModel(_vm.Vms.Select(v => v.Name), _isoHistory, ubuntu);
+        var newVm = new NewVmViewModel(_vm.Vms.Select(v => v.Name), _isoHistory, ubuntu, _vm.OfferedLocation)
+        {
+            LocationChosen = location => _vm.VmLocation = location,
+        };
         if (_demo) newVm.RunScript = Services.DemoNewVmScript.RunAsync;
         else
         {

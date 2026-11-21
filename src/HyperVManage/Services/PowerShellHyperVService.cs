@@ -27,6 +27,8 @@ public sealed class PowerShellHyperVService : IHyperVService
                 IPAddresses = @($na | ForEach-Object { $_.IPAddresses } | Where-Object { $_ -and $_ -notmatch ':' } | ForEach-Object { [string]$_ })
                 CheckpointCount = @(Get-VMSnapshot -VM $_ -ErrorAction SilentlyContinue | Where-Object { "$($_.SnapshotType)" -notmatch 'Recovery|Replica' }).Count
                 Generation = [int]$_.Generation
+                Location = [string]$_.Path
+                Disks = @($_.HardDrives | ForEach-Object { [string]$_.Path } | Where-Object { $_ })
             }
         })
         ConvertTo-Json -InputObject $vms -Depth 3 -Compress
@@ -193,25 +195,60 @@ public sealed class PowerShellHyperVService : IHyperVService
         "if (-not $checkpoint) { throw 'That checkpoint no longer exists.' }",
         $"Rename-VMSnapshot -VMSnapshot $checkpoint -NewName {Ps.Quote(newName)}");
 
-    public Task CloneAsync(string vmId, string newName, CancellationToken ct = default) =>
-        PowerShellRunner.RunAsync(BuildCloneScript(vmId, newName), ct);
+    public Task CloneAsync(string vmId, string newName, string? location = null, CancellationToken ct = default) =>
+        PowerShellRunner.RunAsync(BuildCloneScript(vmId, newName, location), ct);
 
     /// <summary>
-    /// Hyper-V has no clone command. Export the VM, import that as a copy with a new id into the
-    /// usual VM and disk folders under the new name, then delete the export. The export goes beside
-    /// the VM disks, not into TEMP, since it is a full copy of the disk and the system drive may be
-    /// the small one. Anything made before a failure is removed again.
+    /// Hyper-V has no clone command. Export the VM, import that as a copy with a new id under the
+    /// new name, then delete the export. Without a location the copy goes in folders named after it
+    /// under Hyper-V's VM and disk folders; with one, in a folder named after it there, disks in its
+    /// Virtual Hard Disks, as Hyper-V Manager lays out a VM it's told where to keep. The export goes
+    /// on the same drive as the copy, not into TEMP, since it is a full copy of the disks and the
+    /// system drive may be the small one; so that drive needs room for both for a moment, which is
+    /// checked first. Anything made before a failure is removed again.
     /// </summary>
-    internal static string BuildCloneScript(string vmId, string newName) => GetVm(vmId) + $$"""
+    internal static string BuildCloneScript(string vmId, string newName, string? location = null) => GetVm(vmId) + $$"""
         $newName = {{Ps.Quote(newName)}}
+        $location = {{Ps.Quote(location ?? "")}}
         # Where-Object, not Get-VM -Name, which would read [ ] * ? in a name as wildcards.
         if (Get-VM | Where-Object Name -eq $newName) { throw "There is already a VM named $newName." }
         if ($vm.State -notin 'Off', 'Saved') { throw "Shut down or save $($vm.Name) first, so the copy is taken from a VM that isn't changing." }
         $vmHost = Get-VMHost
-        $vmFolder = Join-Path $vmHost.VirtualMachinePath $newName
-        $diskFolder = Join-Path $vmHost.VirtualHardDiskPath $newName
+        if ($location) {
+            $vmFolder = Join-Path $location $newName
+            $diskFolder = Join-Path $vmFolder 'Virtual Hard Disks'
+            $exportParent = $location
+        } else {
+            $vmFolder = Join-Path $vmHost.VirtualMachinePath $newName
+            $diskFolder = Join-Path $vmHost.VirtualHardDiskPath $newName
+            $exportParent = $vmHost.VirtualHardDiskPath
+        }
         foreach ($f in $vmFolder, $diskFolder) { if (Test-Path -LiteralPath $f) { throw "The folder $f already exists. Pick another name, or remove the folder." } }
-        $export = Join-Path $vmHost.VirtualHardDiskPath ('.HyperVManage-clone-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $exportParent -Force | Out-Null
+        # Every disk file the export copies: each drive's chain of checkpoint disks down to its
+        # .vhdx, and those of the VM's checkpoints.
+        $files = @{}
+        $drives = @(Get-VMHardDiskDrive -VM $vm) + @(Get-VMSnapshot -VM $vm -ErrorAction SilentlyContinue | Get-VMHardDiskDrive -ErrorAction SilentlyContinue)
+        foreach ($drive in $drives) {
+            $p = [string]$drive.Path
+            while ($p -and -not $files.ContainsKey($p.ToLowerInvariant())) {
+                $vhd = Get-VHD -Path $p -ErrorAction SilentlyContinue
+                if (-not $vhd) { break }
+                $files[$p.ToLowerInvariant()] = [uint64]$vhd.FileSize
+                $p = $vhd.ParentPath
+            }
+        }
+        $size = [uint64]0
+        foreach ($s in $files.Values) { $size += $s }
+        {{NewVmScript.FreeSpaceFunction()}}
+        $free = Get-FreeSpace $exportParent
+        # The export and the copy made from it, both there until the export is deleted.
+        $needed = [uint64]($size * 2 + 1GB)
+        if ($null -ne $free -and $free -lt $needed) {
+            throw ("Copying $($vm.Name) needs about {0} GB free in {1}, for the copy and a temporary export of it, and there's only {2} GB there. Make room, or choose another location." -f
+                [Math]::Ceiling($needed / 1GB), $exportParent, [Math]::Floor($free / 1GB))
+        }
+        $export = Join-Path $exportParent ('.HyperVManage-clone-' + [guid]::NewGuid().ToString('N'))
         $copy = $null
         try {
             Export-VM -VM $vm -Path $export
@@ -308,6 +345,13 @@ public sealed class PowerShellHyperVService : IHyperVService
         if (Test-Inside $vm.ConfigurationLocation $vmFolder) { $nameFolders += $vmFolder }
         $diskFolder = Join-Path $vmHost.VirtualHardDiskPath $name
         if ($disks | Where-Object { Test-Inside $_ $diskFolder }) { $nameFolders += $diskFolder }
+        # A VM given a location (New VM or Clone) is kept in a folder named after it there. Never
+        # Hyper-V's own folders, even for a VM that happens to share their name.
+        $own = [string]$vm.Path
+        if ($own -and (Split-Path -Leaf $own.TrimEnd('\')) -eq $name -and
+            ($vmHost.VirtualMachinePath, $vmHost.VirtualHardDiskPath | Where-Object { $_.TrimEnd('\') -eq $own.TrimEnd('\') }).Count -eq 0) {
+            $nameFolders += $own
+        }
         Remove-VM -VM $vm -Force
         foreach ($d in $disks) {
             if (-not $d) { continue }
@@ -538,6 +582,8 @@ public sealed class PowerShellHyperVService : IHyperVService
                 IpAddresses = Strings(e, "IPAddresses"),
                 CheckpointCount = (int)Num(e, "CheckpointCount"),
                 Generation = (int)Num(e, "Generation"),
+                Location = Str(e, "Location"),
+                DiskPaths = Strings(e, "Disks"),
             };
             list.Add(vm);
         }

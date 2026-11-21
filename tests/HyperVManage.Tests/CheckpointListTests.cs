@@ -387,7 +387,7 @@ public class CheckpointListTests
         public Task ApplyCheckpointAsync(string vmId, string checkpointId, string? saveCurrentAs, CancellationToken ct = default) => _demo.ApplyCheckpointAsync(vmId, checkpointId, saveCurrentAs, ct);
         public Task DeleteCheckpointsAsync(string vmId, IReadOnlyList<string> checkpointIds, bool includeLater, CancellationToken ct = default) => _demo.DeleteCheckpointsAsync(vmId, checkpointIds, includeLater, ct);
         public Task RenameCheckpointAsync(string vmId, string checkpointId, string newName, CancellationToken ct = default) => _demo.RenameCheckpointAsync(vmId, checkpointId, newName, ct);
-        public Task CloneAsync(string vmId, string newName, CancellationToken ct = default) => _demo.CloneAsync(vmId, newName, ct);
+        public Task CloneAsync(string vmId, string newName, string? location = null, CancellationToken ct = default) => _demo.CloneAsync(vmId, newName, location, ct);
         public Task<IReadOnlyList<string>> GetDiskPathsAsync(string vmId, CancellationToken ct = default) => _demo.GetDiskPathsAsync(vmId, ct);
         public Task<DeleteResult> DeleteAsync(string vmId, CancellationToken ct = default) => _demo.DeleteAsync(vmId, ct);
         public Task<string> CreateExternalSwitchAsync(CancellationToken ct = default) => _demo.CreateExternalSwitchAsync(ct);

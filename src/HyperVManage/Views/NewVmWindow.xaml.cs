@@ -25,6 +25,7 @@ public partial class NewVmWindow : Window
         _vm = vm;
         _isoToRestore = vm.IsoPath;
         PickIso = ShowIsoDialog;
+        PickFolder = start => FolderPicker.Pick(this, start);
         DataContext = vm;
         Loaded += (_, _) => SyncIsoSelection();
         vm.Announce += text => Announcer.Announce(this, text);
@@ -264,6 +265,21 @@ public partial class NewVmWindow : Window
             Announcer.Announce(this, "Opening the download page in your browser.");
         }
         catch (Exception ex) { Announcer.Announce(this, $"Couldn't open the download page: {ex.Message}"); }
+    }
+
+    /// <summary>Asks for a folder, starting from the one given; null if cancelled. The folder dialog,
+    /// or a stand-in in tests.</summary>
+    internal Func<string, string?> PickFolder { get; set; }
+
+    private void ChooseFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (PickFolder(_vm.Location) is { } folder)
+        {
+            _vm.Location = folder;
+            // Said, since focus comes back to the button and the box's new text isn't read there.
+            Announcer.Announce(this, _vm.LocationDescription);
+        }
+        LocationBox.Focus();
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();

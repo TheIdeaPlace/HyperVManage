@@ -175,13 +175,87 @@ public class MainViewModelTests
         await vm.RefreshAsync();
         vm.Selected = vm.Vms.Single(v => v.State == "Off");
 
-        vm.RequestCloneName = _ => null;
+        vm.RequestClone = (_, _) => null;
         await vm.CloneCommand.ExecuteAsync(null);
         Assert.Equal(3, vm.Vms.Count);
 
-        vm.RequestCloneName = _ => "  Copy One ";
+        vm.RequestClone = (_, _) => new CloneRequest("  Copy One ", "");
         await vm.CloneCommand.ExecuteAsync(null);
-        Assert.Contains(vm.Vms, v => v.Name == "Copy One");
+        var copy = vm.Vms.Single(v => v.Name == "Copy One");
+        Assert.Equal(DemoHyperVService.DefaultVmFolder, copy.Location);
+    }
+
+    [Fact]
+    public async Task Clone_ToALocation_PutsTheCopyInAFolderOfItsOwnThere_AndRemembersIt()
+    {
+        var settings = new InMemorySettingsStore();
+        var vm = new MainViewModel(new DemoHyperVService { Delay = TimeSpan.Zero }, settings: settings) { CheckLocation = _ => null };
+        await vm.RefreshAsync();
+        vm.Selected = vm.Vms.Single(v => v.State == "Off");
+        var said = new List<string>();
+        vm.Announce += said.Add;
+        string? offered = null;
+        vm.RequestClone = (_, location) => { offered = location; return new CloneRequest("Copy", @"D:\Hyper-V\"); };
+
+        await vm.CloneCommand.ExecuteAsync(null);
+
+        Assert.Equal("", offered);
+        var copy = vm.Vms.Single(v => v.Name == "Copy");
+        Assert.Equal(@"D:\Hyper-V\Copy", copy.Location);
+        Assert.Equal([@"D:\Hyper-V\Copy\Virtual Hard Disks\Copy.vhdx"], copy.DiskPaths);
+        Assert.Contains(said, s => s == @"Copy is ready, a copy of Test2 in D:\Hyper-V\Copy.");
+        // Offered next time, and kept for the next run.
+        Assert.Equal(@"D:\Hyper-V", vm.VmLocation);
+        Assert.Equal(@"D:\Hyper-V", settings.Load().VmLocation);
+        vm.Selected = copy;
+        await vm.CloneCommand.ExecuteAsync(null);
+        Assert.Equal(@"D:\Hyper-V", offered);
+    }
+
+    [Fact]
+    public void OfferedLocation_IsEmpty_WhenTheLastOneCantBeUsedNow()
+    {
+        var settings = new InMemorySettingsStore();
+        settings.Save(new SettingsData { VmLocation = @"E:\Gone" });
+        var vm = new MainViewModel(new DemoHyperVService { Delay = TimeSpan.Zero }, settings: settings)
+        {
+            CheckLocation = l => l.StartsWith('E') ? "There's no drive E:\\ on this PC just now." : null,
+        };
+        Assert.Equal(@"E:\Gone", vm.VmLocation);
+        Assert.Equal("", vm.OfferedLocation);
+    }
+
+    [Fact]
+    public async Task ApplyColumns_ChangesEveryRow_SavesThem_AndAnUnknownColumnIsDropped()
+    {
+        var settings = new InMemorySettingsStore();
+        var vm = new MainViewModel(new DemoHyperVService { Delay = TimeSpan.Zero }, settings: settings);
+        await vm.RefreshAsync();
+        var changes = 0;
+        vm.ColumnsChanged += () => changes++;
+
+        vm.ApplyColumns(["name", "location", "nonsense", "location"], speakNames: false);
+
+        Assert.Equal(1, changes);
+        Assert.Equal(["name", "location"], vm.RowFormat.Columns.Select(c => c.Id));
+        Assert.All(vm.Vms, v => Assert.Equal($"{v.Name}, {v.Location}", v.AccessibleName));
+        Assert.Equal(["name", "location"], settings.Load().VmListColumns);
+        Assert.False(settings.Load().SpeakColumnNames);
+
+        // A new VM read later gets the same columns.
+        var again = new MainViewModel(new DemoHyperVService { Delay = TimeSpan.Zero }, settings: settings);
+        await again.RefreshAsync();
+        Assert.Equal(["name", "location"], again.RowFormat.Columns.Select(c => c.Id));
+        Assert.False(again.RowFormat.SpeakNames);
+    }
+
+    [Fact]
+    public void ColumnWidths_KeepOnlyKnownColumns_AndSensibleWidths()
+    {
+        var settings = new InMemorySettingsStore();
+        var vm = new MainViewModel(new DemoHyperVService(), settings: settings);
+        vm.RememberColumnWidths(new Dictionary<string, double> { ["name"] = 210.4, ["nonsense"] = 50, ["state"] = double.NaN, ["memory"] = -3 }, saveNow: true);
+        Assert.Equal(new Dictionary<string, double> { ["name"] = 210 }, settings.Load().VmListColumnWidths);
     }
 
     [Fact]

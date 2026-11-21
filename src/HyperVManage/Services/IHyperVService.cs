@@ -73,7 +73,10 @@ public interface IHyperVService
     Task DeleteCheckpointsAsync(string vmId, IReadOnlyList<string> checkpointIds, bool includeLater, CancellationToken ct = default);
 
     Task RenameCheckpointAsync(string vmId, string checkpointId, string newName, CancellationToken ct = default);
-    Task CloneAsync(string vmId, string newName, CancellationToken ct = default);
+    /// <summary>Copies a VM, disks and all, as a new VM. With a location, the copy goes in a folder
+    /// named after it there, its disks in that folder's Virtual Hard Disks; without one, in
+    /// Hyper-V's default folders.</summary>
+    Task CloneAsync(string vmId, string newName, string? location = null, CancellationToken ct = default);
 
     /// <summary>The disk files attached to a VM, for the Delete confirmation to name.</summary>
     Task<IReadOnlyList<string>> GetDiskPathsAsync(string vmId, CancellationToken ct = default);

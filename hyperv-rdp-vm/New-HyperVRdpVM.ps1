@@ -83,6 +83,17 @@
     Use the Default Switch instead, as earlier versions did. The VM can then be
     reached only from this PC, and nothing about this PC's networking changes.
 
+.PARAMETER Location
+    A folder to keep the virtual machine in, such as D:\Hyper-V on another
+    drive. The VM gets a folder of its own there, named after it, with its
+    settings inside and its disks in that folder's Virtual Hard Disks, as
+    Hyper-V Manager lays out a VM it's told where to keep. The drive must be
+    formatted NTFS or ReFS. Leave it out to use Hyper-V's own default folders.
+
+.PARAMETER VhdFolder
+    The folder for the VM's virtual disk, if it should differ from where
+    -Location, or Hyper-V's default, would put it.
+
 .PARAMETER NoAutoStart
     Don't start the VM when this PC starts. By default it starts every time,
     so turning the PC on is enough to be able to connect.
@@ -99,6 +110,9 @@
 
 .EXAMPLE
     .\New-HyperVRdpVM.ps1 -Ubuntu
+
+.EXAMPLE
+    .\New-HyperVRdpVM.ps1 -VMName Test3 -Location D:\Hyper-V
 
 .EXAMPLE
     .\New-HyperVRdpVM.ps1 -VMName Test2 -Remove
@@ -124,6 +138,7 @@ param(
     [ValidateRange(2, 512)]
     [int]$MemoryGB = 4,
     [string]$SwitchName,
+    [string]$Location,
     [string]$VhdFolder,
     [string]$Locale,
     [string]$TimeZone = (Get-TimeZone).Id,
@@ -304,7 +319,7 @@ if ($Remove) {
     # A run that failed after the disk was built but before the VM existed
     # leaves the disk behind, and the next run refuses to overwrite it.
     # An Ubuntu build stopped partway can leave its installer disk too.
-    $folder = if ($VhdFolder) { $VhdFolder } else { (Get-VMHost).VirtualHardDiskPath }
+    $folder = if ($VhdFolder) { $VhdFolder } elseif ($Location) { Join-Path (Join-Path $Location $VMName) 'Virtual Hard Disks' } else { (Get-VMHost).VirtualHardDiskPath }
     foreach ($leftover in @((Join-Path $folder "$VMName.vhdx"), (Join-Path $folder "$VMName-installer.vhd"))) {
         if ((Test-Path -LiteralPath $leftover) -and -not ($disks | Where-Object { $_ -and $_.ToLowerInvariant() -eq $leftover.ToLowerInvariant() })) {
             $disks += $leftover
@@ -324,6 +339,15 @@ if ($Remove) {
         }
     }
 
+    # The folder of its own a VM made with -Location has, named after it: the one Hyper-V says
+    # it's kept in, or failing that the one -Location names. Never Hyper-V's own folders.
+    $ownFolder = $null
+    $vmHostPaths = @((Get-VMHost).VirtualMachinePath, (Get-VMHost).VirtualHardDiskPath) | ForEach-Object { $_.TrimEnd('\') }
+    $candidate = if ($vm -and $vm.Path) { [string]$vm.Path } elseif ($Location) { Join-Path $Location $VMName } else { $null }
+    if ($candidate -and (Split-Path -Leaf $candidate.TrimEnd('\')) -eq $VMName -and ($vmHostPaths -notcontains $candidate.TrimEnd('\'))) {
+        $ownFolder = $candidate
+    }
+
     if ($vm) {
         Say "Deleting the virtual machine $VMName."
         Remove-VM -VM $vm -Force
@@ -334,6 +358,13 @@ if ($Remove) {
         Say "Deleting the virtual disk $d."
         try { Remove-Item -LiteralPath $d -Force -ErrorAction Stop }
         catch { Say "Couldn't delete $d. $($_.Exception.Message)" }
+    }
+    # Only once no files are left anywhere in it, so nothing else kept there is lost.
+    if ($ownFolder -and (Test-Path -LiteralPath $ownFolder -PathType Container) -and
+        -not (Get-ChildItem -LiteralPath $ownFolder -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        Say "Deleting the folder $ownFolder, which is now empty."
+        try { Remove-Item -LiteralPath $ownFolder -Recurse -Force -ErrorAction Stop }
+        catch { Say "Couldn't delete $ownFolder. $($_.Exception.Message)" }
     }
     # Only the connection file this script made: one that connects to this VM.
     if (Test-Path -LiteralPath $rdpFile) {
@@ -409,6 +440,28 @@ if (-not $Ubuntu -and $Edition -match 'Home') {
 if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
     throw "A virtual machine named $VMName already exists. Pick another name with -VMName, or delete it with -Remove."
 }
+# --- Location (begin)
+# Hyper-V refuses a VM's files on FAT32 or exFAT, as many external drives come formatted, but only
+# once the disk is being made; and a drive that isn't plugged in fails with a puzzling path error.
+if ($Location) {
+    if ($Location -notmatch '^([A-Za-z]:\\|\\\\[^\\]+\\[^\\]+)') {
+        throw "The location must be a full path to a folder, such as D:\Hyper-V, not '$Location'."
+    }
+    $locationRoot = [IO.Path]::GetPathRoot($Location)
+    if (-not (Test-Path -LiteralPath $locationRoot)) {
+        throw "Can't reach $locationRoot, where the location $Location is. Plug the drive in or connect to the share, or choose another location."
+    }
+    if ($locationRoot -match '^[A-Za-z]:\\$') {
+        $format = [IO.DriveInfo]::new($locationRoot).DriveFormat
+        if ($format -notin 'NTFS', 'ReFS') {
+            throw "Hyper-V can only keep a virtual machine on a drive formatted NTFS or ReFS, and $locationRoot is $format. Choose a folder on another drive, or reformat this one as NTFS."
+        }
+    }
+    if (Test-Path -LiteralPath $Location -PathType Leaf) {
+        throw "$Location is a file, not a folder. Choose a folder for the location."
+    }
+}
+# --- Location (end)
 
 # --- Network -------------------------------------------------------------------
 # By default the VM joins this PC's own network through an external switch, so
@@ -499,7 +552,9 @@ if ($IsoPath) {
     $IsoPath = (Resolve-Path -LiteralPath $IsoPath).Path
 }
 
-if (-not $VhdFolder) { $VhdFolder = (Get-VMHost).VirtualHardDiskPath }
+if (-not $VhdFolder) {
+    $VhdFolder = if ($Location) { Join-Path (Join-Path $Location $VMName) 'Virtual Hard Disks' } else { (Get-VMHost).VirtualHardDiskPath }
+}
 New-Item -ItemType Directory -Path $VhdFolder -Force | Out-Null
 $vhdPath = Join-Path $VhdFolder "$VMName.vhdx"
 if (Test-Path -LiteralPath $vhdPath) {
@@ -558,7 +613,9 @@ function Add-NetworkSwitch([string[]]$RemoveOnFailure) {
 # is left to the caller to set once the VM is ready: an Ubuntu VM still holding its installer
 # disk would install itself over again if the PC restarted first.
 function New-BaseVM([switch]$Later) {
-    New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ([int64]$MemoryGB * 1GB) -VHDPath $vhdPath -SwitchName $SwitchName | Out-Null
+    # -Path makes the VM's own folder, named after it, there; its settings go in it.
+    $where = if ($Location) { @{ Path = $Location } } else { @{} }
+    New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ([int64]$MemoryGB * 1GB) -VHDPath $vhdPath -SwitchName $SwitchName @where | Out-Null
     Set-VMProcessor -VMName $VMName -Count $ProcessorCount
     Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes 2GB -StartupBytes ([int64]$MemoryGB * 1GB) -MaximumBytes ([int64][Math]::Max($MemoryGB * 2, 8) * 1GB)
     Set-VM -Name $VMName -AutomaticCheckpointsEnabled $false

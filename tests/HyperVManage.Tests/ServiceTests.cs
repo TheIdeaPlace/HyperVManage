@@ -42,14 +42,61 @@ public class VmStateTests
 public class VmInfoTests
 {
     [Fact]
-    public void AccessibleName_LeadsWithNameAndState_ThenAddressAndNetwork()
+    public void AccessibleName_IsTheColumnsInOrder_NamedExceptTheFirstAndTheState()
     {
         var vm = new VmInfo("1") { Name = "Win11-RDP", State = "Running", IpAddresses = ["10.0.0.41"], SwitchName = "External Wi-Fi" };
-        Assert.Equal("Win11-RDP, Running, 10.0.0.41, External Wi-Fi", vm.AccessibleName);
+        Assert.Equal("Win11-RDP, Running, Address: 10.0.0.41, Network: External Wi-Fi", vm.AccessibleName);
         Assert.Equal(vm.AccessibleName, vm.ToString());
 
         vm.IsBusy = true;
         Assert.EndsWith(", busy", vm.AccessibleName);
+    }
+
+    [Fact]
+    public void AccessibleName_WithNamesOff_IsJustTheValues()
+    {
+        var vm = new VmInfo("1") { Name = "Win11-RDP", State = "Running", IpAddresses = ["10.0.0.41"], SwitchName = "External Wi-Fi" };
+        vm.RowFormat = VmRowFormat.Default with { SpeakNames = false };
+        Assert.Equal("Win11-RDP, Running, 10.0.0.41, External Wi-Fi", vm.AccessibleName);
+    }
+
+    [Fact]
+    public void AccessibleName_FollowsTheColumnsChosen_InTheirOrder()
+    {
+        var vm = new VmInfo("1")
+        {
+            Name = "SSD-Test", State = "Off", Location = @"D:\Hyper-V\SSD-Test",
+            DiskPaths = [@"D:\Hyper-V\SSD-Test\Virtual Hard Disks\SSD-Test.vhdx"], CheckpointCount = 2,
+        };
+        var changed = new List<string?>();
+        vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        vm.RowFormat = new VmRowFormat(VmColumns.Set.Defs(["name", "location", "checkpoints", "state"]), true);
+        Assert.Contains(nameof(VmInfo.AccessibleName), changed);
+        Assert.Equal(@"SSD-Test, Location: D:\Hyper-V\SSD-Test, 2 checkpoints, Off", vm.AccessibleName);
+
+        // A field changing changes the row's name, so a screen reader never reads a stale one.
+        changed.Clear();
+        vm.Location = @"E:\VMs\SSD-Test";
+        Assert.Contains(nameof(VmInfo.AccessibleName), changed);
+        Assert.Contains(@"Location: E:\VMs\SSD-Test", vm.AccessibleName);
+    }
+
+    [Fact]
+    public void ColumnValues_AreWhatTheColumnsShow()
+    {
+        var vm = new VmInfo("1")
+        {
+            Name = "A", ProcessorCount = 4, CheckpointCount = 1,
+            DiskPaths = [@"D:\A\one.vhdx", @"D:\A\two.vhdx"],
+        };
+        Assert.Equal("4", VmColumns.Value(vm, "processors"));
+        Assert.Equal("1 checkpoint", VmColumns.Value(vm, "checkpoints"));
+        Assert.Equal(@"D:\A\one.vhdx; D:\A\two.vhdx", VmColumns.Value(vm, "disks"));
+        Assert.Equal("", VmColumns.Value(vm, "memory"));
+        Assert.Equal("No checkpoints", VmColumns.Value(new VmInfo("2"), "checkpoints"));
+        // Every column in the set has a value and a property to bind to.
+        foreach (var c in VmColumns.Set.Columns)
+            Assert.NotNull(typeof(VmInfo).GetProperty(c.Property));
     }
 
     [Fact]
@@ -306,7 +353,11 @@ public class ScriptBuildingTests
             PowerShellHyperVService.SwitchScript,
             PowerShellHyperVService.CreateSwitchScript,
             PowerShellHyperVService.BuildCloneScript("id", "copy"),
+            PowerShellHyperVService.BuildCloneScript("id", "Kelly's copy", @"D:\Kelly's VMs"),
             PowerShellHyperVService.BuildDeleteScript("id"),
+            NewVmScript.BuildCommand(Options() with { Location = @"D:\Kelly's VMs" }, "HyperVManage-test"),
+            NewVmScript.BuildPrecheckScript("Kelly's VM", "", @"D:\Kelly's VMs"),
+            NewVmScript.BuildCleanupScript("Kelly's VM", "", @"D:\Kelly's VMs\Kelly's VM\Virtual Hard Disks\Kelly's VM.vhdx", ownFolder: @"D:\Kelly's VMs\Kelly's VM"),
             PowerShellHyperVService.BuildSettingsScript("id", Current, new VmSettings(2, 2048, false, "X", "Start", true)),
             PowerShellHyperVService.BuildSettingsScript("id", Current, Current with { SwitchName = "" }),
             NewVmScript.BuildCommand(Options(), "HyperVManage-test"),
