@@ -30,6 +30,14 @@ public class UpdateServiceTests
         Assert.Equal("https://github.com/TheIdeaPlace/HyperVManage/releases/tag/v0.10.1", found?.Page.AbsoluteUri);
     }
 
+    [Fact]
+    public void NewestRelease_Finds1_0_From0_9_AndNothingNewerFrom1_0()
+    {
+        var json = Releases(Release("v0.9.8"), Release("v1.0.0"), Release("v0.10.0"));
+        Assert.Equal("1.0.0", UpdateService.NewestRelease(json, "0.9.8")?.Version);
+        Assert.Null(UpdateService.NewestRelease(json, "1.0.0"));
+    }
+
     [Theory]
     [InlineData("0.9.3")]
     [InlineData("0.9.4")]

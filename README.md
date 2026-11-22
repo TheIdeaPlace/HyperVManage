@@ -1,6 +1,6 @@
 # Hyper-V Manage
 
-> **Status: pre-release**, in use on real Hyper-V on Arm64 and x64 PCs.
+> **Status: 1.0**, in use on real Hyper-V on Arm64 and x64 PCs.
 
 A Windows app for managing Hyper-V virtual machines, built screen reader first. It is the
 Windows counterpart of [Parallels Manager](https://github.com/kellylford/TheWorkBench/tree/main/parallels-manager), and it builds new Windows
@@ -350,12 +350,13 @@ like the other apps; see `The-Idea-Place-Projects/signing/windows.md`.
   It tests, builds both apps with the tag as their version, signs them and the VM script, packs a
   Velopack installer and update feed for each processor (x64 on Velopack's `win` channel, Arm64
   on `win-arm64`), checks every signature, including inside the packages, and publishes a GitHub
-  release. Its notes start with `docs/release-notes/v<version>.md` when there is one. Before 1.0
-  a release is a GitHub pre-release, and installed copies still see it as an update.
+  release. Its notes start with `docs/release-notes/v<version>.md` when there is one. A version
+  starting 0. is published as a GitHub pre-release; 1.0 and later are full releases. Installed
+  copies see either as an update.
 
   ```bat
-  git tag v0.9.3
-  git push origin v0.9.3
+  git tag v1.0.0
+  git push origin v1.0.0
   ```
 
   Set `<Version>` in `src/HyperVManage/HyperVManage.csproj` to the next release's number. A pull
