@@ -1,11 +1,11 @@
 name: Release Hyper-V Manage
 
-# A tag like v0.9.3 tests Hyper-V Manage, builds it for x64 and Arm64, signs the apps and the VM
+# A tag like v1.0.0 tests Hyper-V Manage, builds it for x64 and Arm64, signs the apps and the VM
 # script with Azure Artifact Signing, packs a Velopack installer and update feed for each, checks
 # every signature, and publishes a GitHub release:
 #
-#   git tag v0.9.3
-#   git push origin v0.9.3
+#   git tag v1.0.0
+#   git push origin v1.0.0
 #
 # A pull request, or a run by hand (Actions, Run workflow), does all of that except publish, and
 # keeps the files as a workflow artifact to try. Its version is the project's with
@@ -270,6 +270,12 @@ jobs:
           $notesFile = "docs\release-notes\v$version.md"
           $notes = if (Test-Path $notesFile) { (Get-Content $notesFile -Raw) + "`n" } else { '' }
           $notes += @'
+          ## The default sign-in
+
+          Every VM is made with the user name **vmuser** and password **vmadmin** unless you choose
+          others, and joins your network with Remote Desktop on, so choose your own password on a
+          network you share.
+
           ## Download
 
           - **HyperVManage-Setup-x64.exe** for Intel and AMD PCs, or **HyperVManage-Setup-arm64.exe**
@@ -291,12 +297,7 @@ jobs:
           $pre = @()
           if ($version.StartsWith('0.')) {
             $pre = @('--prerelease')
-            $notes = @'
-          **This is a pre-release.** Every VM is made with the user name **vmuser** and password
-          **vmadmin** unless you choose others, and joins your network with Remote Desktop on, so choose
-          your own password on a network you share.
-
-          '@ + $notes
+            $notes = "**This is a pre-release.**`n`n" + $notes
           }
           Set-Content notes.md $notes
           # The update feed: both channels' indexes and every package, deltas included. Named one by
