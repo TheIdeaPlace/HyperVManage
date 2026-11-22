@@ -70,8 +70,9 @@ public sealed class UpdateService : IUpdateService
     {
         try
         {
-            // Every release here is Hyper-V Manage's, and while its version starts 0. each is a
-            // GitHub pre-release, so pre-releases count.
+            // Every release here is Hyper-V Manage's. Releases before 1.0 were GitHub
+            // pre-releases, so pre-releases still count: a 0.9 install finds 1.0, and 1.0 finds
+            // whatever comes next.
             var manager = _feed is null
                 ? new UpdateManager(new GithubSource(AppInfo.RepoUrl, accessToken: null, prerelease: true))
                 : new UpdateManager(_feed);
